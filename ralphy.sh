@@ -1118,17 +1118,24 @@ create_agent_worktree() {
   local worktree_dir="${WORKTREE_BASE}/agent-${agent_num}"
   
   # Run git commands from original directory
+  # Errors go to stderr which will be captured by caller's log redirect
   (
-    cd "$ORIGINAL_DIR" || exit 1
+    cd "$ORIGINAL_DIR" || { echo "Failed to cd to $ORIGINAL_DIR" >&2; exit 1; }
     
-    # Create branch from base (force to reset if exists)
-    git branch -f "$branch_name" "$BASE_BRANCH" 2>/dev/null || true
+    # Prune any stale worktrees first
+    git worktree prune 2>&1
+    
+    # Delete branch if it exists (force)
+    git branch -D "$branch_name" 2>/dev/null || true
+    
+    # Create branch from base
+    git branch "$branch_name" "$BASE_BRANCH" 2>&1 || { echo "Failed to create branch $branch_name from $BASE_BRANCH" >&2; exit 1; }
     
     # Remove existing worktree dir if any
     rm -rf "$worktree_dir" 2>/dev/null || true
     
     # Create worktree
-    git worktree add -f "$worktree_dir" "$branch_name" 2>/dev/null
+    git worktree add "$worktree_dir" "$branch_name" 2>&1 || { echo "Failed to create worktree at $worktree_dir" >&2; exit 1; }
   )
   
   echo "$worktree_dir|$branch_name"
@@ -1157,15 +1164,24 @@ run_parallel_agent() {
   
   echo "setting up" > "$status_file"
   
+  # Log setup info
+  echo "Agent $agent_num starting for task: $task_name" >> "$log_file"
+  echo "ORIGINAL_DIR=$ORIGINAL_DIR" >> "$log_file"
+  echo "WORKTREE_BASE=$WORKTREE_BASE" >> "$log_file"
+  echo "BASE_BRANCH=$BASE_BRANCH" >> "$log_file"
+  
   # Create isolated worktree for this agent
   local worktree_info
   worktree_info=$(create_agent_worktree "$task_name" "$agent_num" 2>>"$log_file")
   local worktree_dir="${worktree_info%%|*}"
   local branch_name="${worktree_info##*|}"
   
+  echo "Worktree dir: $worktree_dir" >> "$log_file"
+  echo "Branch name: $branch_name" >> "$log_file"
+  
   if [[ ! -d "$worktree_dir" ]]; then
     echo "failed" > "$status_file"
-    echo "Failed to create worktree" >> "$log_file"
+    echo "ERROR: Worktree directory does not exist: $worktree_dir" >> "$log_file"
     echo "0 0" > "$output_file"
     return 1
   fi
