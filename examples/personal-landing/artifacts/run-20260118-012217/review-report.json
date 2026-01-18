@@ -1,0 +1,71 @@
+{
+  "issues": [
+    {
+      "severity": "critical",
+      "file": "index.html",
+      "description": "Avatar placeholder missing unique id attribute - test expects id=\"avatar\" but element only has class=\"avatar-placeholder\"",
+      "suggestedFix": "Add id=\"avatar\" to the avatar placeholder div element at line 191"
+    },
+    {
+      "severity": "critical",
+      "file": "index.html",
+      "description": "Avatar placeholder missing role=\"img\" for accessibility - screen readers need this role for the avatar",
+      "suggestedFix": "Add role=\"img\" to the avatar placeholder div element at line 191"
+    },
+    {
+      "severity": "critical",
+      "file": "index.html",
+      "description": "Form fields missing aria-required=\"true\" attribute - accessibility requirement for required fields",
+      "suggestedFix": "Add aria-required=\"true\" to the required input and textarea elements (name, email, project-summary)"
+    },
+    {
+      "severity": "warning",
+      "file": "index.html",
+      "description": "Navigation missing link to bio section - nav includes Home, Services, Highlights, Insights, Contact but not Bio/About",
+      "suggestedFix": "Add <li><a href=\"#bio\" class=\"nav-link\">About</a></li> to the nav-list"
+    },
+    {
+      "severity": "warning",
+      "file": "index.html",
+      "description": "Social links in thought-leadership section use text labels only, not SVG icons as expected by tests",
+      "suggestedFix": "Add inline SVG icons alongside text labels for LinkedIn and Medium links, or update tests to match implementation"
+    },
+    {
+      "severity": "warning",
+      "file": "styles.css",
+      "description": "CSS class name mismatch - test expects \".bio-section\" but HTML/CSS uses \".bio\"",
+      "suggestedFix": "Either rename .bio to .bio-section in CSS and HTML, or update test to expect .bio"
+    },
+    {
+      "severity": "warning",
+      "file": "styles.css",
+      "description": "CSS class name mismatch - test expects \".social-icon\" but CSS uses \".social-link\" for social links",
+      "suggestedFix": "Either add .social-icon class alongside .social-link, or update test to expect .social-link"
+    },
+    {
+      "severity": "warning",
+      "file": "styles.css",
+      "description": "Border-radius test expects literal \"50%\" but CSS uses variable var(--border-radius-full) which equals 50%",
+      "suggestedFix": "Update test to use variable reference or verify CSS uses border-radius: 50% explicitly"
+    },
+    {
+      "severity": "warning",
+      "file": "styles.css",
+      "description": "Avatar initials color mismatch - test expects \"color: white\" but CSS uses \"color: var(--color-text-muted)\"",
+      "suggestedFix": "Update CSS to use \"color: white\" for avatar-initials, or update test to expect CSS variable"
+    },
+    {
+      "severity": "critical",
+      "file": "script.js",
+      "description": "Missing validateForm function - test expects this function to exist for form validation",
+      "suggestedFix": "Add a validateForm() function that wraps the form validation logic, or update test to match current implementation"
+    },
+    {
+      "severity": "critical",
+      "file": "script.js",
+      "description": "Missing isValidEmail function - test expects this function to exist for email validation",
+      "suggestedFix": "Add an isValidEmail(email) helper function that returns boolean, or update test to match current inline regex validation"
+    }
+  ],
+  "summary": "Found 11 issues across HTML, CSS, and JavaScript files. Critical issues include missing id, role, and aria attributes for accessibility, and missing JavaScript functions expected by tests. Warning issues include CSS class naming mismatches and test expectations that don't match implementation (border-radius variable vs literal, color variable vs literal). The test suite has 21 passing and 11 failing tests. Most issues stem from test assumptions not matching the actual implementation, suggesting either tests need updating or implementation needs to match original specifications."
+}

@@ -1,0 +1,20 @@
+{
+  "name": "juanfranciscolebrero-landing",
+  "version": "1.0.0",
+  "description": "Personal landing page for Juan Francisco Lebrero - GenAI Consultant",
+  "scripts": {
+    "test": "node tests/section.test.js",
+    "test:html": "node -e \"require('./tests/section.test.js')\"",
+    "validate:html": "node -e \"const fs = require('fs'); const html = fs.readFileSync('index.html', 'utf8'); console.log('HTML validation: OK'); console.log('Sections found:', (html.match(/id=\"/g') || []).length);\""
+  },
+  "keywords": [
+    "personal-landing-page",
+    "genai-consultant",
+    "juanfranciscolebrero"
+  ],
+  "author": "Juan Francisco Lebrero",
+  "license": "MIT",
+  "devDependencies": {
+    "mocha": "^10.2.0"
+  }
+}

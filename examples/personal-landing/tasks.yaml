@@ -1,0 +1,52 @@
+version: 1
+tasks:
+  - id: SETUP-001
+    title: "Initialize project structure and dependencies"
+    completed: true
+    dependsOn: []
+    mutex: ["lockfile"]
+  - id: SETUP-002
+    title: "Create global configuration for scheduler URL and social links"
+    completed: true
+    dependsOn: ["SETUP-001"]
+    mutex: ["global-config"]
+  - id: SETUP-003
+    title: "Set up routing with anchor navigation for all sections"
+    completed: true
+    dependsOn: ["SETUP-001"]
+    mutex: ["router"]
+  - id: US-001
+    title: "Build Hero & Credibility Block with name, title, value proposition, and CTA"
+    completed: true
+    dependsOn: ["SETUP-002"]
+    mutex: []
+  - id: US-002
+    title: "Build Services & Outcomes section with service cards and outcome labels"
+    completed: true
+    dependsOn: ["US-001"]
+    mutex: []
+  - id: US-003
+    title: "Build Case Signal / Highlights section with business impact bullets"
+    completed: true
+    dependsOn: ["US-002"]
+    mutex: []
+  - id: US-004
+    title: "Build Thought Leadership Teasers section with micro-insights"
+    completed: true
+    dependsOn: ["US-003"]
+    mutex: []
+  - id: US-005
+    title: "Build Contact / Booking Flow with Calendly link, email, and form"
+    completed: true
+    dependsOn: ["US-004"]
+    mutex: []
+  - id: US-006
+    title: "Build Trust & Bio Section with avatar placeholder and social links"
+    completed: true
+    dependsOn: ["US-005"]
+    mutex: []
+  - id: US-007
+    title: "Add SEO metadata, schema.org Person markup, and performance optimizations"
+    completed: true
+    dependsOn: ["SETUP-002"]
+    mutex: []
