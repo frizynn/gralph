@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "description": "Catalog of valid mutex names for tasks.yaml v1",
+  "mutex": {
+    "db-migrations": {
+      "description": "Database schema changes and migrations",
+      "examples": ["db/migrations/**", "prisma/migrations/**"]
+    },
+    "lockfile": {
+      "description": "Package lock files",
+      "examples": ["package-lock.json", "yarn.lock", "pnpm-lock.yaml", "Cargo.lock"]
+    },
+    "router": {
+      "description": "Route configuration files",
+      "examples": ["src/routes/**", "app/routes.ts"]
+    },
+    "global-config": {
+      "description": "Global configuration files",
+      "examples": ["config/**", ".env.example", "settings.json"]
+    }
+  },
+  "patterns": {
+    "contract:*": {
+      "description": "Interface contracts (use contract:name format)",
+      "examples": ["contract:auth-api", "contract:user-schema", "contract:payment-api"]
+    }
+  },
+  "notes": [
+    "Add new mutex entries as needed for your project",
+    "Contract mutex use pattern: contract:<name>",
+    "Tasks sharing a mutex will never run simultaneously"
+  ]
+}

@@ -6,10 +6,12 @@ An autonomous AI coding loop that runs AI assistants (Claude Code, OpenCode, Cod
 
 ## What It Does
 
-1. Reads tasks from a PRD file, YAML file, or GitHub Issues
-2. Sends each task to an AI assistant
-3. The AI implements the feature, writes tests, and commits changes
-4. Repeats until all tasks are done
+1. **Auto-converts PRD to tasks** - If you have a PRD.md, Ralph generates tasks.yaml automatically
+2. **Validates and schedules** - DAG validation, dependency ordering, mutex enforcement
+3. **Runs parallel agents** - Each task runs in an isolated git worktree
+4. **Merges with AI conflict resolution** - Integration branch with smart merge
+5. **Reviews the result** - Semantic reviewer checks for issues
+6. **Generates fix tasks** - If issues found, creates new tasks and loops
 
 ## Quick Start
 
@@ -18,22 +20,27 @@ An autonomous AI coding loop that runs AI assistants (Claude Code, OpenCode, Cod
 git clone https://github.com/juanfra/central-ralph.git
 cd central-ralph
 chmod +x ralph.sh
-
-# Create a PRD file with tasks
-cat > PRD.md << 'EOF'
-# My Project
-
-## Tasks
-- [ ] Create user authentication
-- [ ] Add dashboard page
-- [ ] Build API endpoints
-EOF
-
-# Run Ralph
-./ralph.sh
 ```
 
-That's it. Ralph will work through each task autonomously.
+### The Simple Workflow
+
+1. **Create your PRD** using your favorite AI (Cursor, Claude, Codex, etc.):
+   ```
+   "Create a PRD for a personal blog landing page with hero section and posts list"
+   ```
+
+2. **Run Ralph** and it does everything:
+   ```bash
+   ./ralph.sh --yaml tasks.yaml --parallel
+   ```
+
+That's it. Ralph will:
+- Convert PRD.md to tasks.yaml (if needed)
+- Validate dependencies and mutex
+- Run parallel agents
+- Merge branches with AI conflict resolution
+- Review the integrated code
+- Generate fix tasks if issues found
 
 ## Usage
 
@@ -54,15 +61,25 @@ That's it. Ralph will work through each task autonomously.
 
 ## Skills Setup
 
-Ralph can install the `prd` and `ralph` skills for the active AI engine:
+Ralph can install skills for the active AI engine:
 
 ```bash
 ./ralph.sh --init
 ```
 
-- Installs only missing skills (never overwrites).
-- Use `--skills-url URL` or `RALPH_SKILLS_BASE_URL` to override the download source.
-- Cursor does not have official skill support; installs are best-effort as `.cursor/rules/*.mdc`.
+Available skills:
+- `prd` - Generate Product Requirements Documents
+- `ralph` - Convert PRDs to prd.json format
+- `task-metadata` - Generate/validate task metadata for YAML v1
+- `dag-planner` - Build and validate task DAGs
+- `parallel-safe-implementation` - Guidelines for safe parallel work
+- `merge-integrator` - Merge branches and resolve conflicts
+- `semantic-reviewer` - Review integrated code for issues
+
+Options:
+- Installs only missing skills (never overwrites)
+- Use `--skills-url URL` or `RALPH_SKILLS_BASE_URL` to override the download source
+- Cursor does not have official skill support; installs are best-effort as `.cursor/rules/*.mdc`
 
 ## Task Sources
 
@@ -86,7 +103,29 @@ Format your PRD like this:
 ./ralph.sh --yaml tasks.yaml
 ```
 
-Format:
+#### YAML v1 (DAG + Mutex)
+
+For parallel execution with dependency and mutex support, use the v1 schema:
+
+```yaml
+version: 1
+tasks:
+  - id: US-001
+    title: Add users table
+    completed: false
+    dependsOn: []
+    mutex: ["db-migrations"]
+  - id: US-002
+    title: Create auth middleware
+    completed: false
+    dependsOn: ["US-001"]
+    mutex: ["contract:auth-api"]
+```
+
+See `docs/tasks-yaml-v1.md` for full schema documentation.
+
+#### Legacy YAML (simple)
+
 ```yaml
 tasks:
   - title: First task
@@ -111,6 +150,18 @@ Run multiple AI agents simultaneously, each in its own isolated git worktree:
 ```bash
 ./ralph.sh --parallel                    # 3 agents (default)
 ./ralph.sh --parallel --max-parallel 5   # 5 agents
+```
+
+### DAG-Aware Scheduling (YAML v1)
+
+With `tasks.yaml` v1, Ralph uses a DAG scheduler that:
+- Respects `dependsOn` (tasks wait for dependencies)
+- Enforces `mutex` (only one task can hold a mutex at a time)
+- Detects deadlocks and cycles
+- Maximizes parallelism while avoiding conflicts
+
+```bash
+./ralph.sh --yaml tasks.yaml --parallel
 ```
 
 ### How It Works

@@ -273,7 +273,7 @@ install_skill_if_missing() {
 ensure_skills_for_engine() {
   local engine=$1
   local mode=$2
-  local skills=("prd" "ralph")
+  local skills=("prd" "ralph" "task-metadata" "dag-planner" "parallel-safe-implementation" "merge-integrator" "semantic-reviewer")
   local missing=false
 
   if [[ "$engine" == "cursor" ]]; then
@@ -520,13 +520,31 @@ check_requirements() {
       fi
       ;;
     yaml)
-      if [[ ! -f "$PRD_FILE" ]]; then
-        log_error "$PRD_FILE not found in current directory"
-        exit 1
-      fi
       if ! command -v yq &>/dev/null; then
         log_error "yq is required for YAML parsing. Install from https://github.com/mikefarah/yq"
         exit 1
+      fi
+      
+      # Auto-generate tasks.yaml from PRD if it doesn't exist
+      if [[ ! -f "$PRD_FILE" ]]; then
+        local prd_file
+        if prd_file=$(find_prd_file); then
+          log_info "Found $prd_file, generating tasks.yaml..."
+          if ! run_metadata_agent "$prd_file"; then
+            log_error "Failed to generate tasks.yaml from PRD"
+            exit 1
+          fi
+        else
+          log_error "$PRD_FILE not found and no PRD.md to convert"
+          exit 1
+        fi
+      fi
+      
+      # Validate v1 schema if version: 1
+      if is_yaml_v1; then
+        if ! validate_tasks_yaml_v1; then
+          exit 1
+        fi
       fi
       ;;
     github)
@@ -716,6 +734,739 @@ get_parallel_group_yaml() {
 get_tasks_in_group_yaml() {
   local group=$1
   yq -r ".tasks[] | select(.completed != true and (.parallel_group // 0) == $group) | .title" "$PRD_FILE" 2>/dev/null || true
+}
+
+# ============================================
+# YAML V1 VALIDATION (DAG + MUTEX)
+# ============================================
+
+# Check if tasks.yaml uses v1 format
+is_yaml_v1() {
+  local version
+  version=$(yq -r '.version // 0' "$PRD_FILE" 2>/dev/null)
+  [[ "$version" == "1" ]]
+}
+
+# Get task ID by index
+get_task_id_yaml_v1() {
+  local idx=$1
+  yq -r ".tasks[$idx].id // \"\"" "$PRD_FILE" 2>/dev/null
+}
+
+# Get all task IDs
+get_all_task_ids_yaml_v1() {
+  yq -r '.tasks[].id' "$PRD_FILE" 2>/dev/null
+}
+
+# Get pending task IDs
+get_pending_task_ids_yaml_v1() {
+  yq -r '.tasks[] | select(.completed != true) | .id' "$PRD_FILE" 2>/dev/null
+}
+
+# Get task title by ID
+get_task_title_by_id_yaml_v1() {
+  local id=$1
+  yq -r ".tasks[] | select(.id == \"$id\") | .title" "$PRD_FILE" 2>/dev/null
+}
+
+# Get task dependsOn by ID
+get_task_deps_by_id_yaml_v1() {
+  local id=$1
+  yq -r ".tasks[] | select(.id == \"$id\") | .dependsOn[]?" "$PRD_FILE" 2>/dev/null
+}
+
+# Get task mutex by ID
+get_task_mutex_by_id_yaml_v1() {
+  local id=$1
+  yq -r ".tasks[] | select(.id == \"$id\") | .mutex[]?" "$PRD_FILE" 2>/dev/null
+}
+
+# Check if task is completed
+is_task_completed_yaml_v1() {
+  local id=$1
+  local completed
+  completed=$(yq -r ".tasks[] | select(.id == \"$id\") | .completed" "$PRD_FILE" 2>/dev/null)
+  [[ "$completed" == "true" ]]
+}
+
+# Mark task complete by ID
+mark_task_complete_by_id_yaml_v1() {
+  local id=$1
+  yq -i "(.tasks[] | select(.id == \"$id\")).completed = true" "$PRD_FILE"
+}
+
+# Load mutex catalog
+load_mutex_catalog() {
+  local catalog_file="${ORIGINAL_DIR:-$(pwd)}/mutex-catalog.json"
+  if [[ ! -f "$catalog_file" ]]; then
+    # Return empty if no catalog (allow any mutex)
+    echo ""
+    return
+  fi
+  # Return list of valid mutex names
+  jq -r '.mutex | keys[]' "$catalog_file" 2>/dev/null
+}
+
+# Check if mutex is valid (in catalog or matches contract:* pattern)
+is_valid_mutex() {
+  local mutex=$1
+  local catalog=$2
+  
+  # contract:* pattern is always valid
+  if [[ "$mutex" == contract:* ]]; then
+    return 0
+  fi
+  
+  # Check against catalog
+  if [[ -z "$catalog" ]]; then
+    # No catalog = allow all
+    return 0
+  fi
+  
+  echo "$catalog" | grep -qx "$mutex"
+}
+
+# Validate tasks.yaml v1 schema
+validate_tasks_yaml_v1() {
+  local errors=()
+  
+  # Check version
+  local version
+  version=$(yq -r '.version // "missing"' "$PRD_FILE" 2>/dev/null)
+  if [[ "$version" != "1" ]]; then
+    errors+=("version must be 1 (got: $version)")
+  fi
+  
+  # Load mutex catalog
+  local mutex_catalog
+  mutex_catalog=$(load_mutex_catalog)
+  
+  # Get all task IDs for dependency checking
+  local all_ids=()
+  while IFS= read -r id; do
+    [[ -n "$id" ]] && all_ids+=("$id")
+  done < <(get_all_task_ids_yaml_v1)
+  
+  # Check for duplicate IDs
+  local seen_ids=()
+  for id in "${all_ids[@]}"; do
+    if [[ " ${seen_ids[*]} " =~ " $id " ]]; then
+      errors+=("Duplicate id: $id")
+    else
+      seen_ids+=("$id")
+    fi
+  done
+  
+  # Validate each task
+  local task_count
+  task_count=$(yq -r '.tasks | length' "$PRD_FILE" 2>/dev/null)
+  
+  for ((i=0; i<task_count; i++)); do
+    local id title completed
+    id=$(yq -r ".tasks[$i].id // \"\"" "$PRD_FILE")
+    title=$(yq -r ".tasks[$i].title // \"\"" "$PRD_FILE")
+    completed=$(yq -r ".tasks[$i].completed // \"\"" "$PRD_FILE")
+    
+    # Check required fields
+    [[ -z "$id" ]] && errors+=("Task $((i+1)): missing id")
+    [[ -z "$title" ]] && errors+=("Task $((i+1)): missing title")
+    [[ "$completed" != "true" && "$completed" != "false" ]] && errors+=("Task $id: completed must be true/false")
+    
+    # Validate dependsOn references
+    while IFS= read -r dep; do
+      [[ -z "$dep" ]] && continue
+      if [[ ! " ${all_ids[*]} " =~ " $dep " ]]; then
+        errors+=("Task $id: dependsOn '$dep' not found")
+      fi
+    done < <(yq -r ".tasks[$i].dependsOn[]?" "$PRD_FILE" 2>/dev/null)
+    
+    # Validate mutex
+    while IFS= read -r mutex; do
+      [[ -z "$mutex" ]] && continue
+      if ! is_valid_mutex "$mutex" "$mutex_catalog"; then
+        errors+=("Task $id: unknown mutex '$mutex'")
+      fi
+    done < <(yq -r ".tasks[$i].mutex[]?" "$PRD_FILE" 2>/dev/null)
+  done
+  
+  # Check for cycles
+  local cycle_path
+  cycle_path=$(detect_cycles_yaml_v1)
+  if [[ -n "$cycle_path" ]]; then
+    errors+=("Cycle detected: $cycle_path")
+  fi
+  
+  # Report errors
+  if [[ ${#errors[@]} -gt 0 ]]; then
+    log_error "tasks.yaml v1 validation failed:"
+    for err in "${errors[@]}"; do
+      echo "  - $err" >&2
+    done
+    return 1
+  fi
+  
+  log_success "tasks.yaml v1 valid (${#all_ids[@]} tasks)"
+  return 0
+}
+
+# Detect cycles using DFS
+detect_cycles_yaml_v1() {
+  local -A state  # unvisited=0, visiting=1, visited=2
+  local -A parent
+  local cycle_found=""
+  
+  # Initialize
+  local all_ids=()
+  while IFS= read -r id; do
+    [[ -n "$id" ]] && all_ids+=("$id")
+    state[$id]=0
+  done < <(get_all_task_ids_yaml_v1)
+  
+  # DFS function (iterative to avoid bash recursion limits)
+  dfs_check() {
+    local start=$1
+    local stack=("$start")
+    local path_stack=("$start")
+    
+    while [[ ${#stack[@]} -gt 0 ]]; do
+      local current="${stack[-1]}"
+      
+      if [[ ${state[$current]} -eq 0 ]]; then
+        state[$current]=1  # visiting
+        
+        # Get dependencies
+        while IFS= read -r dep; do
+          [[ -z "$dep" ]] && continue
+          
+          if [[ ${state[$dep]} -eq 1 ]]; then
+            # Found cycle - build path
+            local cycle_path="$dep"
+            for ((j=${#path_stack[@]}-1; j>=0; j--)); do
+              cycle_path="${path_stack[$j]} → $cycle_path"
+              [[ "${path_stack[$j]}" == "$dep" ]] && break
+            done
+            echo "$cycle_path"
+            return
+          elif [[ ${state[$dep]} -eq 0 ]]; then
+            stack+=("$dep")
+            path_stack+=("$dep")
+            parent[$dep]=$current
+          fi
+        done < <(get_task_deps_by_id_yaml_v1 "$current")
+        
+      else
+        # Backtrack
+        unset 'stack[-1]'
+        unset 'path_stack[-1]'
+        state[$current]=2  # visited
+      fi
+    done
+  }
+  
+  # Run DFS from each unvisited node
+  for id in "${all_ids[@]}"; do
+    if [[ ${state[$id]} -eq 0 ]]; then
+      local result
+      result=$(dfs_check "$id")
+      if [[ -n "$result" ]]; then
+        echo "$result"
+        return
+      fi
+    fi
+  done
+}
+
+# ============================================
+# DAG SCHEDULER (YAML V1)
+# ============================================
+
+# Global scheduler state (arrays for bash 3.x compat, but we use bash 4+ features)
+declare -A SCHED_STATE      # task_id -> pending|running|done|failed
+declare -A SCHED_LOCKED     # mutex -> task_id (who holds it)
+
+# Initialize scheduler state
+scheduler_init_yaml_v1() {
+  SCHED_STATE=()
+  SCHED_LOCKED=()
+  
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    if is_task_completed_yaml_v1 "$id"; then
+      SCHED_STATE[$id]="done"
+    else
+      SCHED_STATE[$id]="pending"
+    fi
+  done < <(get_all_task_ids_yaml_v1)
+}
+
+# Check if task dependencies are satisfied
+scheduler_deps_satisfied() {
+  local id=$1
+  while IFS= read -r dep; do
+    [[ -z "$dep" ]] && continue
+    if [[ "${SCHED_STATE[$dep]}" != "done" ]]; then
+      return 1
+    fi
+  done < <(get_task_deps_by_id_yaml_v1 "$id")
+  return 0
+}
+
+# Check if task can acquire its mutex
+scheduler_mutex_available() {
+  local id=$1
+  while IFS= read -r mutex; do
+    [[ -z "$mutex" ]] && continue
+    if [[ -n "${SCHED_LOCKED[$mutex]}" ]]; then
+      return 1
+    fi
+  done < <(get_task_mutex_by_id_yaml_v1 "$id")
+  return 0
+}
+
+# Lock mutex for a task
+scheduler_lock_mutex() {
+  local id=$1
+  while IFS= read -r mutex; do
+    [[ -z "$mutex" ]] && continue
+    SCHED_LOCKED[$mutex]=$id
+  done < <(get_task_mutex_by_id_yaml_v1 "$id")
+}
+
+# Unlock mutex for a task
+scheduler_unlock_mutex() {
+  local id=$1
+  while IFS= read -r mutex; do
+    [[ -z "$mutex" ]] && continue
+    unset "SCHED_LOCKED[$mutex]"
+  done < <(get_task_mutex_by_id_yaml_v1 "$id")
+}
+
+# Get ready tasks (deps satisfied and mutex available)
+scheduler_get_ready() {
+  local ready=()
+  for id in "${!SCHED_STATE[@]}"; do
+    if [[ "${SCHED_STATE[$id]}" == "pending" ]]; then
+      if scheduler_deps_satisfied "$id" && scheduler_mutex_available "$id"; then
+        ready+=("$id")
+      fi
+    fi
+  done
+  printf '%s\n' "${ready[@]}"
+}
+
+# Get count of running tasks
+scheduler_count_running() {
+  local count=0
+  for id in "${!SCHED_STATE[@]}"; do
+    [[ "${SCHED_STATE[$id]}" == "running" ]] && ((count++))
+  done
+  echo "$count"
+}
+
+# Get count of pending tasks
+scheduler_count_pending() {
+  local count=0
+  for id in "${!SCHED_STATE[@]}"; do
+    [[ "${SCHED_STATE[$id]}" == "pending" ]] && ((count++))
+  done
+  echo "$count"
+}
+
+# Mark task as running
+scheduler_start_task() {
+  local id=$1
+  SCHED_STATE[$id]="running"
+  scheduler_lock_mutex "$id"
+  log_debug "Task $id: pending → running (mutex locked)"
+}
+
+# Mark task as done
+scheduler_complete_task() {
+  local id=$1
+  SCHED_STATE[$id]="done"
+  scheduler_unlock_mutex "$id"
+  mark_task_complete_by_id_yaml_v1 "$id"
+  log_debug "Task $id: running → done (mutex released)"
+}
+
+# Mark task as failed
+scheduler_fail_task() {
+  local id=$1
+  SCHED_STATE[$id]="failed"
+  scheduler_unlock_mutex "$id"
+  log_debug "Task $id: running → failed (mutex released)"
+}
+
+# Explain why a task is blocked
+scheduler_explain_block() {
+  local id=$1
+  local reasons=()
+  
+  # Check deps
+  local blocked_deps=()
+  while IFS= read -r dep; do
+    [[ -z "$dep" ]] && continue
+    if [[ "${SCHED_STATE[$dep]}" != "done" ]]; then
+      blocked_deps+=("$dep (${SCHED_STATE[$dep]:-unknown})")
+    fi
+  done < <(get_task_deps_by_id_yaml_v1 "$id")
+  
+  if [[ ${#blocked_deps[@]} -gt 0 ]]; then
+    reasons+=("dependsOn: ${blocked_deps[*]}")
+  fi
+  
+  # Check mutex
+  local blocked_mutex=()
+  while IFS= read -r mutex; do
+    [[ -z "$mutex" ]] && continue
+    if [[ -n "${SCHED_LOCKED[$mutex]}" ]]; then
+      blocked_mutex+=("$mutex (held by ${SCHED_LOCKED[$mutex]})")
+    fi
+  done < <(get_task_mutex_by_id_yaml_v1 "$id")
+  
+  if [[ ${#blocked_mutex[@]} -gt 0 ]]; then
+    reasons+=("mutex: ${blocked_mutex[*]}")
+  fi
+  
+  if [[ ${#reasons[@]} -gt 0 ]]; then
+    echo "${reasons[*]}"
+  fi
+}
+
+# Check for deadlock
+scheduler_check_deadlock() {
+  local pending
+  pending=$(scheduler_count_pending)
+  local running
+  running=$(scheduler_count_running)
+  local ready
+  ready=$(scheduler_get_ready | wc -l | tr -d ' ')
+  
+  if [[ "$pending" -gt 0 && "$running" -eq 0 && "$ready" -eq 0 ]]; then
+    return 0  # Deadlock!
+  fi
+  return 1
+}
+
+# ============================================
+# PIPELINE AGENTS (PRD → TASKS → RUN → REVIEW)
+# ============================================
+
+# Artifacts directory for this run
+ARTIFACTS_DIR=""
+
+# Initialize artifacts directory
+init_artifacts_dir() {
+  ARTIFACTS_DIR="artifacts/run-$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$ARTIFACTS_DIR/reports"
+  export ARTIFACTS_DIR
+}
+
+# Find PRD file (check common locations)
+find_prd_file() {
+  local candidates=(
+    "PRD.md"
+    "prd.md"
+    "tasks/prd-*.md"
+  )
+  for pattern in "${candidates[@]}"; do
+    for f in $pattern; do
+      [[ -f "$f" ]] && echo "$f" && return 0
+    done
+  done
+  return 1
+}
+
+# ============================================
+# STAGE 0: PRD → tasks.yaml (Metadata Agent)
+# ============================================
+
+run_metadata_agent() {
+  local prd_file=$1
+  local output_file="tasks.yaml"
+  
+  log_info "Generating tasks.yaml from $prd_file..."
+  
+  local prompt="Read the PRD file and convert it to tasks.yaml v1 format.
+
+@$prd_file
+
+Create a tasks.yaml file with this EXACT format:
+
+version: 1
+tasks:
+  - id: TASK-001
+    title: \"First task description\"
+    completed: false
+    dependsOn: []
+    mutex: []
+  - id: TASK-002
+    title: \"Second task description\"  
+    completed: false
+    dependsOn: [\"TASK-001\"]
+    mutex: []
+
+Rules:
+1. Each task gets a unique ID (TASK-001, TASK-002, etc.)
+2. Order tasks by dependency (database first, then backend, then frontend)
+3. Use dependsOn to link tasks that must run after others
+4. Use mutex for shared resources: db-migrations, lockfile, router, global-config
+5. Keep tasks small and focused (completable in one session)
+
+Save the file as tasks.yaml in the current directory.
+Do NOT implement anything - only create the tasks.yaml file."
+
+  local tmpfile
+  tmpfile=$(mktemp)
+  
+  case "$AI_ENGINE" in
+    opencode)
+      OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json "$prompt" > "$tmpfile" 2>&1
+      ;;
+    cursor)
+      agent --print --force --output-format stream-json "$prompt" > "$tmpfile" 2>&1
+      ;;
+    codex)
+      codex exec --full-auto --json "$prompt" > "$tmpfile" 2>&1
+      ;;
+    *)
+      claude --dangerously-skip-permissions -p "$prompt" --output-format stream-json > "$tmpfile" 2>&1
+      ;;
+  esac
+  
+  rm -f "$tmpfile"
+  
+  if [[ ! -f "$output_file" ]]; then
+    log_error "Metadata agent failed to create tasks.yaml"
+    return 1
+  fi
+  
+  log_success "Generated tasks.yaml"
+  return 0
+}
+
+# ============================================
+# STAGE 2: Task Reports
+# ============================================
+
+# Get task mergeNotes by ID
+get_task_merge_notes_yaml_v1() {
+  local id=$1
+  yq -r ".tasks[] | select(.id == \"$id\") | .mergeNotes // \"\"" "$PRD_FILE" 2>/dev/null
+}
+
+# Save task report after agent completion
+save_task_report() {
+  local task_id=$1
+  local branch=$2
+  local worktree_dir=$3
+  local status=$4
+  
+  [[ -z "$ARTIFACTS_DIR" ]] && return
+  
+  local changed_files
+  changed_files=$(git -C "$worktree_dir" diff --name-only "$BASE_BRANCH"..HEAD 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+  
+  local commit_count
+  commit_count=$(git -C "$worktree_dir" rev-list --count "$BASE_BRANCH"..HEAD 2>/dev/null || echo "0")
+  
+  cat > "$ARTIFACTS_DIR/reports/$task_id.json" << EOF
+{
+  "taskId": "$task_id",
+  "branch": "$branch",
+  "status": "$status",
+  "commits": $commit_count,
+  "changedFiles": "$changed_files",
+  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+}
+
+# ============================================
+# STAGE 3: Integration Branch + Merge Agent
+# ============================================
+
+INTEGRATION_BRANCH=""
+
+create_integration_branch() {
+  INTEGRATION_BRANCH="ralph/integration-$(date +%Y%m%d-%H%M%S)"
+  git checkout -b "$INTEGRATION_BRANCH" "$BASE_BRANCH" >/dev/null 2>&1
+  log_info "Created integration branch: $INTEGRATION_BRANCH"
+}
+
+# Merge a branch, use AI to resolve conflicts if needed
+merge_branch_with_fallback() {
+  local branch=$1
+  local task_id=$2
+  
+  if git merge --no-edit "$branch" >/dev/null 2>&1; then
+    return 0
+  fi
+  
+  # Conflict - try AI resolution
+  log_warn "Conflict merging $branch, attempting AI resolution..."
+  
+  local conflicted_files
+  conflicted_files=$(git diff --name-only --diff-filter=U 2>/dev/null)
+  
+  local merge_notes
+  merge_notes=$(get_task_merge_notes_yaml_v1 "$task_id")
+  
+  local prompt="Resolve git merge conflicts in these files:
+
+$conflicted_files
+
+Merge notes from task: $merge_notes
+
+For each file:
+1. Read the conflict markers (<<<<<<< HEAD, =======, >>>>>>>)
+2. Combine BOTH changes intelligently
+3. Remove all conflict markers
+4. Ensure valid syntax
+
+Then run:
+git add <files>
+git commit --no-edit"
+
+  local tmpfile
+  tmpfile=$(mktemp)
+  
+  case "$AI_ENGINE" in
+    opencode)
+      OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json "$prompt" > "$tmpfile" 2>&1
+      ;;
+    cursor)
+      agent --print --force --output-format stream-json "$prompt" > "$tmpfile" 2>&1
+      ;;
+    codex)
+      codex exec --full-auto --json "$prompt" > "$tmpfile" 2>&1
+      ;;
+    *)
+      claude --dangerously-skip-permissions -p "$prompt" --output-format stream-json > "$tmpfile" 2>&1
+      ;;
+  esac
+  
+  rm -f "$tmpfile"
+  
+  # Check if resolved
+  if git diff --name-only --diff-filter=U 2>/dev/null | grep -q .; then
+    log_error "AI failed to resolve conflicts in $branch"
+    git merge --abort 2>/dev/null
+    return 1
+  fi
+  
+  log_success "AI resolved conflicts in $branch"
+  return 0
+}
+
+# ============================================
+# STAGE 5: Semantic Reviewer
+# ============================================
+
+run_reviewer_agent() {
+  [[ -z "$ARTIFACTS_DIR" ]] && return 0
+  [[ -z "$INTEGRATION_BRANCH" ]] && return 0
+  
+  log_info "Running semantic reviewer..."
+  
+  local diff_summary
+  diff_summary=$(git diff --stat "$BASE_BRANCH".."$INTEGRATION_BRANCH" 2>/dev/null | tail -20)
+  
+  local reports_summary=""
+  for report in "$ARTIFACTS_DIR"/reports/*.json; do
+    [[ -f "$report" ]] && reports_summary="$reports_summary\n$(cat "$report")"
+  done
+  
+  local prompt="Review the integrated code changes for issues.
+
+Diff summary:
+$diff_summary
+
+Task reports:
+$reports_summary
+
+Check for:
+1. Type mismatches between modules
+2. Broken imports or references
+3. Inconsistent patterns (error handling, naming)
+4. Missing exports
+
+Create a file review-report.json with this format:
+{
+  \"issues\": [
+    {\"severity\": \"blocker|critical|warning\", \"file\": \"path\", \"description\": \"...\", \"suggestedFix\": \"...\"}
+  ],
+  \"summary\": \"Brief overall assessment\"
+}
+
+If no issues found, create an empty issues array.
+Save to $ARTIFACTS_DIR/review-report.json"
+
+  local tmpfile
+  tmpfile=$(mktemp)
+  
+  case "$AI_ENGINE" in
+    opencode)
+      OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json "$prompt" > "$tmpfile" 2>&1
+      ;;
+    cursor)
+      agent --print --force --output-format stream-json "$prompt" > "$tmpfile" 2>&1
+      ;;
+    codex)
+      codex exec --full-auto --json "$prompt" > "$tmpfile" 2>&1
+      ;;
+    *)
+      claude --dangerously-skip-permissions -p "$prompt" --output-format stream-json > "$tmpfile" 2>&1
+      ;;
+  esac
+  
+  rm -f "$tmpfile"
+  
+  if [[ -f "$ARTIFACTS_DIR/review-report.json" ]]; then
+    local blockers
+    blockers=$(jq -r '[.issues[] | select(.severity == "blocker")] | length' "$ARTIFACTS_DIR/review-report.json" 2>/dev/null || echo "0")
+    
+    if [[ "$blockers" -gt 0 ]]; then
+      log_warn "Reviewer found $blockers blocker(s)"
+      return 1
+    fi
+    
+    log_success "Review passed (no blockers)"
+  fi
+  
+  return 0
+}
+
+# Generate fix tasks from review report
+generate_fix_tasks() {
+  [[ ! -f "$ARTIFACTS_DIR/review-report.json" ]] && return 0
+  
+  local blockers
+  blockers=$(jq -r '.issues[] | select(.severity == "blocker")' "$ARTIFACTS_DIR/review-report.json" 2>/dev/null)
+  
+  [[ -z "$blockers" ]] && return 0
+  
+  log_info "Generating fix tasks from blockers..."
+  
+  local fix_num=1
+  echo "$blockers" | jq -c '.' | while IFS= read -r issue; do
+    local desc
+    desc=$(echo "$issue" | jq -r '.description')
+    local fix
+    fix=$(echo "$issue" | jq -r '.suggestedFix')
+    
+    yq -i ".tasks += [{
+      \"id\": \"FIX-$(printf '%03d' $fix_num)\",
+      \"title\": \"Fix: $desc\",
+      \"completed\": false,
+      \"dependsOn\": [],
+      \"mutex\": []
+    }]" "$PRD_FILE"
+    
+    ((fix_num++))
+  done
+  
+  log_success "Added fix tasks"
 }
 
 # ============================================
@@ -1691,6 +2442,369 @@ Focus only on implementing: $task_name"
   fi
 }
 
+# Run a single agent for YAML v1 task (by ID)
+run_parallel_agent_yaml_v1() {
+  local task_id="$1"
+  local agent_num="$2"
+  local output_file="$3"
+  local status_file="$4"
+  local log_file="$5"
+  
+  local task_title
+  task_title=$(get_task_title_by_id_yaml_v1 "$task_id")
+  
+  echo "setting up" > "$status_file"
+  echo "Agent $agent_num starting for task: $task_id - $task_title" >> "$log_file"
+  
+  # Create isolated worktree
+  local worktree_info
+  worktree_info=$(create_agent_worktree "$task_id" "$agent_num" 2>>"$log_file")
+  local worktree_dir="${worktree_info%%|*}"
+  local branch_name="${worktree_info##*|}"
+  
+  if [[ ! -d "$worktree_dir" ]]; then
+    echo "failed" > "$status_file"
+    echo "0 0" > "$output_file"
+    return 1
+  fi
+  
+  echo "running" > "$status_file"
+  
+  # Copy PRD file
+  cp "$ORIGINAL_DIR/$PRD_FILE" "$worktree_dir/" 2>/dev/null || true
+  touch "$worktree_dir/progress.txt"
+  
+  # Build prompt for this task
+  local prompt="You are working on a specific task. Focus ONLY on this task:
+
+TASK ID: $task_id
+TASK: $task_title
+
+Instructions:
+1. Implement this specific task completely
+2. Write tests if appropriate
+3. Update progress.txt with what you did
+4. Commit your changes with a descriptive message
+
+Do NOT modify tasks.yaml or mark tasks complete - that will be handled separately.
+Focus only on implementing: $task_title"
+
+  local tmpfile
+  tmpfile=$(mktemp)
+  local result="" success=false retry=0
+  
+  while [[ $retry -lt $MAX_RETRIES ]]; do
+    case "$AI_ENGINE" in
+      opencode)
+        (cd "$worktree_dir" && OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json "$prompt") > "$tmpfile" 2>>"$log_file"
+        ;;
+      cursor)
+        (cd "$worktree_dir" && agent --print --force --output-format stream-json "$prompt") > "$tmpfile" 2>>"$log_file"
+        ;;
+      codex)
+        (cd "$worktree_dir" && codex exec --full-auto --json "$prompt") > "$tmpfile" 2>>"$log_file"
+        ;;
+      *)
+        (cd "$worktree_dir" && claude --dangerously-skip-permissions --verbose -p "$prompt" --output-format stream-json) > "$tmpfile" 2>>"$log_file"
+        ;;
+    esac
+    
+    result=$(cat "$tmpfile" 2>/dev/null || echo "")
+    if [[ -n "$result" ]]; then
+      if check_for_errors "$result" >/dev/null 2>&1; then
+        success=true
+        break
+      fi
+    fi
+    ((retry++))
+    sleep "$RETRY_DELAY"
+  done
+  
+  rm -f "$tmpfile"
+  
+  if [[ "$success" == true ]]; then
+    local commit_count
+    commit_count=$(git -C "$worktree_dir" rev-list --count "$BASE_BRANCH"..HEAD 2>/dev/null || echo "0")
+    if [[ "$commit_count" -eq 0 ]]; then
+      echo "failed" > "$status_file"
+      echo "0 0" > "$output_file"
+      cleanup_agent_worktree "$worktree_dir" "$branch_name" "$log_file"
+      return 1
+    fi
+    
+    if [[ "$CREATE_PR" == true ]]; then
+      (cd "$worktree_dir" && git push -u origin "$branch_name" 2>>"$log_file" || true)
+      gh pr create --base "$BASE_BRANCH" --head "$branch_name" --title "$task_title" \
+        --body "Automated: $task_id" ${PR_DRAFT:+--draft} 2>>"$log_file" || true
+    fi
+    
+    echo "done" > "$status_file"
+    echo "0 0 $branch_name $task_id" > "$output_file"
+    cleanup_agent_worktree "$worktree_dir" "$branch_name" "$log_file"
+    return 0
+  else
+    echo "failed" > "$status_file"
+    echo "0 0" > "$output_file"
+    cleanup_agent_worktree "$worktree_dir" "$branch_name" "$log_file"
+    return 1
+  fi
+}
+
+# DAG-aware parallel execution for YAML v1
+run_parallel_tasks_yaml_v1() {
+  log_info "Running DAG-aware parallel execution (max $MAX_PARALLEL agents)..."
+  
+  ORIGINAL_DIR=$(pwd)
+  export ORIGINAL_DIR
+  WORKTREE_BASE=$(mktemp -d)
+  export WORKTREE_BASE
+  
+  if [[ -z "$BASE_BRANCH" ]]; then
+    BASE_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+  fi
+  export BASE_BRANCH
+  export AI_ENGINE MAX_RETRIES RETRY_DELAY PRD_SOURCE PRD_FILE CREATE_PR PR_DRAFT
+  
+  # Initialize artifacts
+  init_artifacts_dir
+  export ARTIFACTS_DIR
+  log_info "Artifacts: $ARTIFACTS_DIR"
+  
+  # Initialize scheduler
+  scheduler_init_yaml_v1
+  
+  local pending running
+  pending=$(scheduler_count_pending)
+  log_info "Tasks: $pending pending"
+  
+  local completed_branches=()
+  local completed_task_ids=()
+  local agent_num=0
+  
+  # Main scheduler loop
+  while true; do
+    pending=$(scheduler_count_pending)
+    running=$(scheduler_count_running)
+    
+    # Exit conditions
+    if [[ "$pending" -eq 0 && "$running" -eq 0 ]]; then
+      break
+    fi
+    
+    # Check for deadlock
+    if scheduler_check_deadlock; then
+      log_error "DEADLOCK: No progress possible"
+      echo ""
+      echo "${RED}Blocked tasks:${RESET}"
+      for id in "${!SCHED_STATE[@]}"; do
+        if [[ "${SCHED_STATE[$id]}" == "pending" ]]; then
+          local reason
+          reason=$(scheduler_explain_block "$id")
+          echo "  $id: $reason"
+        fi
+      done
+      return 1
+    fi
+    
+    # Get ready tasks
+    local ready_tasks=()
+    while IFS= read -r id; do
+      [[ -n "$id" ]] && ready_tasks+=("$id")
+    done < <(scheduler_get_ready)
+    
+    # Fill slots up to MAX_PARALLEL
+    local slots_available=$((MAX_PARALLEL - running))
+    local tasks_to_start=()
+    
+    for ((i=0; i<${#ready_tasks[@]} && i<slots_available; i++)); do
+      tasks_to_start+=("${ready_tasks[$i]}")
+    done
+    
+    if [[ ${#tasks_to_start[@]} -eq 0 && "$running" -gt 0 ]]; then
+      # Wait for running tasks
+      sleep 0.5
+      continue
+    fi
+    
+    if [[ ${#tasks_to_start[@]} -eq 0 ]]; then
+      sleep 0.5
+      continue
+    fi
+    
+    # Start batch of agents
+    echo ""
+    echo "${BOLD}Starting ${#tasks_to_start[@]} agent(s)${RESET}"
+    
+    local batch_pids=()
+    local batch_ids=()
+    local status_files=()
+    local output_files=()
+    local log_files=()
+    
+    for task_id in "${tasks_to_start[@]}"; do
+      ((agent_num++))
+      ((iteration++))
+      
+      scheduler_start_task "$task_id"
+      
+      local status_file=$(mktemp)
+      local output_file=$(mktemp)
+      local log_file=$(mktemp)
+      
+      status_files+=("$status_file")
+      output_files+=("$output_file")
+      log_files+=("$log_file")
+      batch_ids+=("$task_id")
+      
+      local title
+      title=$(get_task_title_by_id_yaml_v1 "$task_id")
+      printf "  ${CYAN}◉${RESET} Agent %d: %s (%s)\n" "$agent_num" "${title:0:40}" "$task_id"
+      
+      (run_parallel_agent_yaml_v1 "$task_id" "$agent_num" "$output_file" "$status_file" "$log_file") &
+      batch_pids+=($!)
+    done
+    
+    # Wait for this batch with progress
+    local spinner_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    local spin_idx=0
+    local start_time=$SECONDS
+    
+    while true; do
+      local all_done=true
+      local done_count=0 failed_count=0
+      
+      for ((j=0; j<${#batch_pids[@]}; j++)); do
+        local status
+        status=$(cat "${status_files[$j]}" 2>/dev/null || echo "waiting")
+        case "$status" in
+          done) ((done_count++)) ;;
+          failed) ((failed_count++)) ;;
+          *) 
+            if kill -0 "${batch_pids[$j]}" 2>/dev/null; then
+              all_done=false
+            fi
+            ;;
+        esac
+      done
+      
+      [[ "$all_done" == true ]] && break
+      
+      local elapsed=$((SECONDS - start_time))
+      printf "\r  ${CYAN}%s${RESET} Running: %d | Done: %d | Failed: %d | %02d:%02d " \
+        "${spinner_chars:$spin_idx:1}" "${#batch_pids[@]}" "$done_count" "$failed_count" $((elapsed/60)) $((elapsed%60))
+      spin_idx=$(((spin_idx+1) % ${#spinner_chars}))
+      sleep 0.3
+    done
+    
+    printf "\r%80s\r" ""
+    
+    # Wait for processes
+    for pid in "${batch_pids[@]}"; do
+      wait "$pid" 2>/dev/null || true
+    done
+    
+    # Process results
+    for ((j=0; j<${#batch_ids[@]}; j++)); do
+      local task_id="${batch_ids[$j]}"
+      local status
+      status=$(cat "${status_files[$j]}" 2>/dev/null || echo "unknown")
+      local title
+      title=$(get_task_title_by_id_yaml_v1 "$task_id")
+      
+      if [[ "$status" == "done" ]]; then
+        scheduler_complete_task "$task_id"
+        local branch
+        branch=$(awk '{print $3}' "${output_files[$j]}" 2>/dev/null)
+        [[ -n "$branch" ]] && completed_branches+=("$branch")
+        completed_task_ids+=("$task_id")
+        
+        # Save task report
+        save_task_report "$task_id" "$branch" "$WORKTREE_BASE/agent-$((j+1))" "done"
+        
+        printf "  ${GREEN}✓${RESET} %s (%s)\n" "${title:0:45}" "$task_id"
+      else
+        scheduler_fail_task "$task_id"
+        printf "  ${RED}✗${RESET} %s (%s)\n" "${title:0:45}" "$task_id"
+        if [[ -s "${log_files[$j]}" ]]; then
+          echo "${DIM}    Error: $(tail -1 "${log_files[$j]}")${RESET}"
+        fi
+      fi
+      
+      rm -f "${status_files[$j]}" "${output_files[$j]}" "${log_files[$j]}"
+    done
+    
+    # Check max iterations
+    if [[ $MAX_ITERATIONS -gt 0 && $iteration -ge $MAX_ITERATIONS ]]; then
+      log_warn "Reached max iterations ($MAX_ITERATIONS)"
+      break
+    fi
+  done
+  
+  # Cleanup worktree base
+  rm -rf "$WORKTREE_BASE" 2>/dev/null || true
+  
+  # Merge branches if not using PRs
+  if [[ ${#completed_branches[@]} -gt 0 && "$CREATE_PR" != true ]]; then
+    echo ""
+    echo "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo "${BOLD}Integration Phase${RESET}"
+    echo "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    
+    # Create integration branch
+    create_integration_branch
+    
+    echo ""
+    echo "${BOLD}Merging ${#completed_branches[@]} branch(es) to integration...${RESET}"
+    
+    local merge_success=true
+    for ((i=0; i<${#completed_branches[@]}; i++)); do
+      local branch="${completed_branches[$i]}"
+      local task_id="${completed_task_ids[$i]:-}"
+      
+      if merge_branch_with_fallback "$branch" "$task_id"; then
+        printf "  ${GREEN}✓${RESET} %s\n" "$branch"
+        git branch -d "$branch" >/dev/null 2>&1 || true
+      else
+        printf "  ${RED}✗${RESET} %s (unresolved conflict)\n" "$branch"
+        merge_success=false
+      fi
+    done
+    
+    if [[ "$merge_success" == true ]]; then
+      # Run reviewer
+      echo ""
+      echo "${BOLD}Review Phase${RESET}"
+      if run_reviewer_agent; then
+        # Merge integration to base
+        echo ""
+        log_info "Merging integration to $BASE_BRANCH..."
+        git checkout "$BASE_BRANCH" >/dev/null 2>&1
+        if git merge --no-edit "$INTEGRATION_BRANCH" >/dev/null 2>&1; then
+          log_success "Integration merged to $BASE_BRANCH"
+          git branch -d "$INTEGRATION_BRANCH" >/dev/null 2>&1 || true
+        else
+          log_warn "Merge to base failed, integration branch preserved: $INTEGRATION_BRANCH"
+        fi
+      else
+        # Reviewer found blockers - generate fix tasks
+        generate_fix_tasks
+        log_warn "Review found issues. Fix tasks added to tasks.yaml"
+        log_info "Integration branch preserved: $INTEGRATION_BRANCH"
+      fi
+    else
+      log_warn "Some merges failed. Integration branch preserved: $INTEGRATION_BRANCH"
+    fi
+  fi
+  
+  # Show artifacts location
+  if [[ -n "$ARTIFACTS_DIR" && -d "$ARTIFACTS_DIR" ]]; then
+    echo ""
+    log_info "Artifacts saved to: $ARTIFACTS_DIR"
+  fi
+  
+  return 0
+}
+
 run_parallel_tasks() {
   log_info "Running ${BOLD}$MAX_PARALLEL parallel agents${RESET} (each in isolated worktree)..."
   
@@ -2226,7 +3340,12 @@ main() {
 
   # Run in parallel or sequential mode
   if [[ "$PARALLEL" == true ]]; then
-    run_parallel_tasks
+    # Use DAG scheduler for YAML v1, otherwise legacy parallel
+    if [[ "$PRD_SOURCE" == "yaml" ]] && is_yaml_v1; then
+      run_parallel_tasks_yaml_v1
+    else
+      run_parallel_tasks
+    fi
     show_summary
     notify_done
     exit 0
