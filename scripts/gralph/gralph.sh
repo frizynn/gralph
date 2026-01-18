@@ -2509,17 +2509,25 @@ run_parallel_agent() {
   touch "$worktree_dir/scripts/gralph/progress.txt"
   
   # Build prompt for this specific task
-  local prompt="You are working on a specific task. Focus ONLY on this task:
+  local prompt_base=""
+  local prompt_file="$ORIGINAL_DIR/scripts/gralph/prompt.md"
+  if [[ -f "$prompt_file" ]]; then
+    prompt_base=$(cat "$prompt_file")
+  fi
+
+  local prompt="${prompt_base}
+
+You are working on a specific task. Focus ONLY on this task:
 
 TASK: $task_name
 
 Instructions:
 1. Implement this specific task completely
 2. Write tests if appropriate
-3. Update progress.txt with what you did
+3. Update scripts/gralph/progress.txt with what you did
 4. Commit your changes with a descriptive message
 
-Do NOT modify PRD.md or mark tasks complete - that will be handled separately.
+Do NOT modify PRD.md or tasks.yaml - that will be handled separately.
 Focus only on implementing: $task_name"
 
   # Temp file for AI output
