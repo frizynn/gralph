@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Simple test runner for Ralph
+# Simple test runner for GRALPH
 
 set -euo pipefail
 
@@ -27,16 +27,16 @@ run_test() {
     echo -e "${YELLOW}SKIP${NC} (${output#SKIP: })"
   elif [[ $exit_code -eq 0 ]]; then
     echo -e "${GREEN}PASS${NC}"
-    ((TESTS_PASSED++))
+    ((TESTS_PASSED++)) || true
   else
     echo -e "${RED}FAIL${NC}"
-    ((TESTS_FAILED++))
+    ((TESTS_FAILED++)) || true
     echo "    Output:"
     echo "$output" | sed 's/^/    /' | head -20
   fi
 }
 
-echo "Running Ralph tests..."
+echo "Running GRALPH tests..."
 echo ""
 
 for test_file in "$SCRIPT_DIR"/*.test.sh; do

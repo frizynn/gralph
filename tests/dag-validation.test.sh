@@ -14,7 +14,7 @@ RALPH_DIR="$(dirname "$SCRIPT_DIR")"
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-# Source ralph.sh functions (without running main)
+# Source gralph.sh functions (without running main)
 source_ralph() {
   # Extract just the functions we need
   cd "$TMPDIR"

@@ -2,7 +2,7 @@
 
 ## 1. Introducción / Overview
 
-Queremos evolucionar `ralph.sh` para soportar **ejecución paralela robusta** de tareas, minimizando conflictos y reduciendo la probabilidad de fallos semánticos cuando múltiples agentes trabajan a la vez.
+Queremos evolucionar `gralph.sh` para soportar **ejecución paralela robusta** de tareas, minimizando conflictos y reduciendo la probabilidad de fallos semánticos cuando múltiples agentes trabajan a la vez.
 
 El sistema actual ya soporta `--parallel` creando **worktrees aislados** por agente y luego intentando mergear ramas. Esto funciona para paralelismo “best-effort”, pero no resuelve bien:
 
@@ -36,7 +36,7 @@ Esta PRD define un plan **por etapas** para evitar sobrediseño y llegar a un si
 
 ## 4. Usuarios / Stakeholders
 
-- **Usuario principal**: desarrollador que corre `./ralph.sh` para ejecutar un PRD.
+- **Usuario principal**: desarrollador que corre `./gralph.sh` para ejecutar un PRD.
 - **Stakeholders**: mantenedores del repo, equipo que consume PRs, pipeline CI.
 
 ## 5. Conceptos clave (definiciones)
@@ -253,7 +253,7 @@ Cada etapa incluye:
 - [ ] Implementar generación de “fix tasks” a partir del review report.
 - [ ] Implementar política: cuántos ciclos máximo (para evitar loops infinitos).
 
-## 9. Cambios propuestos a `ralph.sh` (resumen)
+## 9. Cambios propuestos a `gralph.sh` (resumen)
 
 - Nuevo modo de input: `--tasks-yaml tasks.yaml` (o reutilizar `--yaml` con esquema v1).
 - Nuevo flujo paralelo:

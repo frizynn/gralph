@@ -1,7 +1,7 @@
 {
   "taskId": "SETUP-001",
   "title": "Initialize project structure and dependencies",
-  "branch": "ralphy/agent-1-setup-001",
+  "branch": "gralph/agent-1-setup-001",
   "status": "done",
   "commits": 1,
   "changedFiles": ".opencode/.gitignore,.opencode/bun.lock,.opencode/package-lock.json,.opencode/package.json,progress.txt",

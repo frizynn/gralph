@@ -1,7 +1,7 @@
 {
   "taskId": "US-006",
   "title": "Build Trust & Bio Section with avatar placeholder and social links",
-  "branch": "ralphy/agent-4-us-006",
+  "branch": "gralph/agent-4-us-006",
   "status": "done",
   "commits": 1,
   "changedFiles": "index.html,package.json,progress.txt,script.js,styles.css,tests/section.test.js",

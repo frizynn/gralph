@@ -1,7 +1,7 @@
 {
   "taskId": "US-002",
   "title": "Build Services & Outcomes section with service cards and outcome labels",
-  "branch": "ralphy/agent-3-us-002",
+  "branch": "gralph/agent-3-us-002",
   "status": "done",
   "commits": 1,
   "changedFiles": "progress.txt,src/index.html,src/script.js,src/styles.css",

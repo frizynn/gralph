@@ -20,7 +20,7 @@ export ORIGINAL_DIR="$TMPDIR"
 declare -A SCHED_STATE
 declare -A SCHED_LOCKED
 
-# Helper functions (copied from ralph.sh for isolation)
+# Helper functions (copied from gralph.sh for isolation)
 get_all_task_ids_yaml_v1() {
   yq -r '.tasks[].id' "$PRD_FILE" 2>/dev/null
 }

@@ -4,3 +4,5 @@
 - ver si el mutex en realdiad es necesario (hasta ahora no se usó en los agentes)
 - ver que cosas son necesarias realmente
 - ahora parece secuencial en la mayoria de casos, ver como se puede paralelizar mejor. En el contrato entre tasks definir que cosa va a hacer cada una y como, asi la otra puede desarrollar su parte sin interferir en la otra.
+
+- Que todo lo relacionado a gralph esté dentro de la carpeta scripts/gralph, corregir el readme, sh, etc. para que tenga en cuenta este cambio

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ============================================
-# Ralphy - Autonomous AI Coding Loop
+# GRALPH - Autonomous AI Coding Loop
 # Supports Claude Code, OpenCode, Codex, and Cursor
 # Runs until PRD is complete
 # ============================================
@@ -44,7 +44,7 @@ GITHUB_LABEL=""
 
 # Skills init options
 SKILLS_INIT=false
-SKILLS_BASE_URL="${RALPH_SKILLS_BASE_URL:-https://raw.githubusercontent.com/frizynn/central-ralph/main/skills}"
+SKILLS_BASE_URL="${GRALPH_SKILLS_BASE_URL:-${RALPH_SKILLS_BASE_URL:-https://raw.githubusercontent.com/frizynn/central-ralph/main/skills}}"
 
 # Colors (detect if terminal supports colors)
 if [[ -t 1 ]] && command -v tput &>/dev/null && [[ $(tput colors 2>/dev/null || echo 0) -ge 8 ]]; then
@@ -116,6 +116,13 @@ slugify() {
   echo "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g' | sed -E 's/^-|-$//g' | cut -c1-50
 }
 
+# Escape string for safe JSON inclusion
+json_escape() {
+  local str="$1"
+  # Escape backslash first, then double quotes, then control characters
+  printf '%s' "$str" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' | tr -d '\n\r'
+}
+
 # Resolve repo root (fallback to current directory)
 resolve_repo_root() {
   git rev-parse --show-toplevel 2>/dev/null || pwd
@@ -135,7 +142,7 @@ extract_error_from_log() {
   local log_file=$1
   local err=""
   if [[ -s "$log_file" ]]; then
-    err=$(grep -v '^\[DEBUG\]' "$log_file" | tail -1)
+    err=$(grep -v '^\[DEBUG\]' "$log_file" | tail -1 || true)
     [[ -z "$err" ]] && err=$(tail -1 "$log_file")
   fi
   echo "$err"
@@ -170,14 +177,19 @@ write_failed_task_report() {
   [[ -z "$ARTIFACTS_DIR" ]] && return
   local reports_dir="$ORIGINAL_DIR/$ARTIFACTS_DIR/reports"
   mkdir -p "$reports_dir"
+  # Escape strings for valid JSON
+  local safe_title safe_error safe_branch
+  safe_title=$(json_escape "$task_title")
+  safe_error=$(json_escape "$error_msg")
+  safe_branch=$(json_escape "$branch")
   cat > "$reports_dir/$task_id.json" << EOF
 {
   "taskId": "$task_id",
-  "title": "$task_title",
-  "branch": "$branch",
+  "title": "$safe_title",
+  "branch": "$safe_branch",
   "status": "failed",
   "failureType": "$failure_type",
-  "errorMessage": "$error_msg",
+  "errorMessage": "$safe_error",
   "commits": 0,
   "changedFiles": "",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -421,10 +433,10 @@ ensure_skills_for_engine() {
 
 show_help() {
   cat << EOF
-${BOLD}Ralphy${RESET} - Autonomous AI Coding Loop (v${VERSION})
+${BOLD}GRALPH${RESET} - Autonomous AI Coding Loop (v${VERSION})
 
 ${BOLD}USAGE:${RESET}
-  ./ralphy.sh [options]
+  ./gralph.sh [options]
 
 ${BOLD}AI ENGINE OPTIONS:${RESET}
   --claude            Use Claude Code (default)
@@ -469,15 +481,15 @@ ${BOLD}OTHER OPTIONS:${RESET}
   --version           Show version number
 
 ${BOLD}EXAMPLES:${RESET}
-  ./ralphy.sh                              # Run with Claude Code
-  ./ralphy.sh --codex                      # Run with Codex CLI
-  ./ralphy.sh --opencode                   # Run with OpenCode
-  ./ralphy.sh --opencode --opencode-model openai/gpt-4o  # OpenCode with specific model
-  ./ralphy.sh --cursor                     # Run with Cursor agent
-  ./ralphy.sh --branch-per-task --create-pr  # Feature branch workflow
-  ./ralphy.sh --parallel --max-parallel 4  # Run 4 tasks concurrently
-  ./ralphy.sh --yaml tasks.yaml            # Use YAML task file
-  ./ralphy.sh --github owner/repo          # Fetch from GitHub issues
+  ./gralph.sh                              # Run with Claude Code
+  ./gralph.sh --codex                      # Run with Codex CLI
+  ./gralph.sh --opencode                   # Run with OpenCode
+  ./gralph.sh --opencode --opencode-model openai/gpt-4o  # OpenCode with specific model
+  ./gralph.sh --cursor                     # Run with Cursor agent
+  ./gralph.sh --branch-per-task --create-pr  # Feature branch workflow
+  ./gralph.sh --parallel --max-parallel 4  # Run 4 tasks concurrently
+  ./gralph.sh --yaml tasks.yaml            # Use YAML task file
+  ./gralph.sh --github owner/repo          # Fetch from GitHub issues
 
 ${BOLD}PRD FORMATS:${RESET}
   Markdown (PRD.md):
@@ -496,7 +508,7 @@ EOF
 }
 
 show_version() {
-  echo "Ralphy v${VERSION}"
+  echo "GRALPH v${VERSION}"
 }
 
 # ============================================
@@ -1127,7 +1139,6 @@ scheduler_init_yaml_v1() {
   SCHED_STATE=()
   SCHED_LOCKED=()
   
-  
   while IFS= read -r id; do
     [[ -z "$id" ]] && continue
     if is_task_completed_yaml_v1 "$id"; then
@@ -1361,24 +1372,7 @@ Do NOT implement anything - only create the tasks.yaml file."
   local tmpfile
   tmpfile=$(mktemp)
   
-  case "$AI_ENGINE" in
-    opencode)
-      if [[ -n "$OPENCODE_MODEL" ]]; then
-        OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json --model "$OPENCODE_MODEL" "$prompt" > "$tmpfile" 2>&1
-      else
-        OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json "$prompt" > "$tmpfile" 2>&1
-      fi
-      ;;
-    cursor)
-      agent --print --force --output-format stream-json "$prompt" > "$tmpfile" 2>&1
-      ;;
-    codex)
-      codex exec --full-auto --json "$prompt" > "$tmpfile" 2>&1
-      ;;
-    *)
-      claude --dangerously-skip-permissions -p "$prompt" --output-format stream-json > "$tmpfile" 2>&1
-      ;;
-  esac
+  execute_ai_prompt "$prompt" "$tmpfile"
   
   rm -f "$tmpfile"
   
@@ -1416,13 +1410,18 @@ save_task_report() {
   local commit_count
   commit_count=$(git -C "$worktree_dir" rev-list --count "$BASE_BRANCH"..HEAD 2>/dev/null || echo "0")
   
+  # Escape strings for valid JSON
+  local safe_branch safe_changed
+  safe_branch=$(json_escape "$branch")
+  safe_changed=$(json_escape "$changed_files")
+  
   cat > "$ARTIFACTS_DIR/reports/$task_id.json" << EOF
 {
   "taskId": "$task_id",
-  "branch": "$branch",
+  "branch": "$safe_branch",
   "status": "$status",
   "commits": $commit_count,
-  "changedFiles": "$changed_files",
+  "changedFiles": "$safe_changed",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF
@@ -1435,7 +1434,7 @@ EOF
 INTEGRATION_BRANCH=""
 
 create_integration_branch() {
-  INTEGRATION_BRANCH="ralph/integration-$(date +%Y%m%d-%H%M%S)"
+INTEGRATION_BRANCH="gralph/integration-$(date +%Y%m%d-%H%M%S)"
   git checkout -b "$INTEGRATION_BRANCH" "$BASE_BRANCH" >/dev/null 2>&1
   log_info "Created integration branch: $INTEGRATION_BRANCH"
 }
@@ -1477,24 +1476,7 @@ git commit --no-edit"
   local tmpfile
   tmpfile=$(mktemp)
   
-  case "$AI_ENGINE" in
-    opencode)
-      if [[ -n "$OPENCODE_MODEL" ]]; then
-        OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json --model "$OPENCODE_MODEL" "$prompt" > "$tmpfile" 2>&1
-      else
-        OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json "$prompt" > "$tmpfile" 2>&1
-      fi
-      ;;
-    cursor)
-      agent --print --force --output-format stream-json "$prompt" > "$tmpfile" 2>&1
-      ;;
-    codex)
-      codex exec --full-auto --json "$prompt" > "$tmpfile" 2>&1
-      ;;
-    *)
-      claude --dangerously-skip-permissions -p "$prompt" --output-format stream-json > "$tmpfile" 2>&1
-      ;;
-  esac
+  execute_ai_prompt "$prompt" "$tmpfile"
   
   rm -f "$tmpfile"
   
@@ -1555,24 +1537,7 @@ Save to $ARTIFACTS_DIR/review-report.json"
   local tmpfile
   tmpfile=$(mktemp)
   
-  case "$AI_ENGINE" in
-    opencode)
-      if [[ -n "$OPENCODE_MODEL" ]]; then
-        OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json --model "$OPENCODE_MODEL" "$prompt" > "$tmpfile" 2>&1
-      else
-        OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json "$prompt" > "$tmpfile" 2>&1
-      fi
-      ;;
-    cursor)
-      agent --print --force --output-format stream-json "$prompt" > "$tmpfile" 2>&1
-      ;;
-    codex)
-      codex exec --full-auto --json "$prompt" > "$tmpfile" 2>&1
-      ;;
-    *)
-      claude --dangerously-skip-permissions -p "$prompt" --output-format stream-json > "$tmpfile" 2>&1
-      ;;
-  esac
+  execute_ai_prompt "$prompt" "$tmpfile"
   
   rm -f "$tmpfile"
   
@@ -1723,16 +1688,16 @@ mark_task_complete() {
 
 create_task_branch() {
   local task=$1
-  local branch_name="ralphy/$(slugify "$task")"
+  local branch_name="gralph/$(slugify "$task")"
   
   log_debug "Creating branch: $branch_name from $BASE_BRANCH"
   
   # Stash any changes (only pop if a new stash was created)
   local stash_before stash_after stashed=false
   stash_before=$(git stash list -1 --format='%gd %s' 2>/dev/null || true)
-  git stash push -m "ralphy-autostash" >/dev/null 2>&1 || true
+  git stash push -m "gralph-autostash" >/dev/null 2>&1 || true
   stash_after=$(git stash list -1 --format='%gd %s' 2>/dev/null || true)
-  if [[ -n "$stash_after" ]] && [[ "$stash_after" != "$stash_before" ]] && [[ "$stash_after" == *"ralphy-autostash"* ]]; then
+  if [[ -n "$stash_after" ]] && [[ "$stash_after" != "$stash_before" ]] && [[ "$stash_after" == *"gralph-autostash"* ]]; then
     stashed=true
   fi
   
@@ -1756,7 +1721,7 @@ create_task_branch() {
 create_pull_request() {
   local branch=$1
   local task=$2
-  local body="${3:-Automated PR created by Ralphy}"
+  local body="${3:-Automated PR created by GRALPH}"
   
   local draft_flag=""
   [[ "$PR_DRAFT" == true ]] && draft_flag="--draft"
@@ -1862,43 +1827,12 @@ monitor_progress() {
     local mins=$((elapsed / 60))
     local secs=$((elapsed % 60))
 
-    # Check latest output for step indicators
-    if [[ -f "$file" ]] && [[ -s "$file" ]]; then
-      local content
-      content=$(tail -c 5000 "$file" 2>/dev/null || true)
-
-      if echo "$content" | grep -qE 'git commit|"command":"git commit'; then
-        current_step="Committing"
-      elif echo "$content" | grep -qE 'git add|"command":"git add'; then
-        current_step="Staging"
-      elif echo "$content" | grep -qE 'progress\.txt'; then
-        current_step="Logging"
-      elif echo "$content" | grep -qE 'PRD\.md|tasks\.yaml'; then
-        current_step="Updating PRD"
-      elif echo "$content" | grep -qE 'lint|eslint|biome|prettier'; then
-        current_step="Linting"
-      elif echo "$content" | grep -qE 'vitest|jest|bun test|npm test|pytest|go test'; then
-        current_step="Testing"
-      elif echo "$content" | grep -qE '\.test\.|\.spec\.|__tests__|_test\.go'; then
-        current_step="Writing tests"
-      elif echo "$content" | grep -qE '"tool":"[Ww]rite"|"tool":"[Ee]dit"|"name":"write"|"name":"edit"'; then
-        current_step="Implementing"
-      elif echo "$content" | grep -qE '"tool":"[Rr]ead"|"tool":"[Gg]lob"|"tool":"[Gg]rep"|"name":"read"|"name":"glob"|"name":"grep"'; then
-        current_step="Reading code"
-      fi
-    fi
+    # Use unified step detection
+    current_step=$(get_agent_current_step "$file")
 
     local spinner_char="${spinstr:$spin_idx:1}"
-    local step_color=""
-    
-    # Color-code steps
-    case "$current_step" in
-      "Thinking"|"Reading code") step_color="$CYAN" ;;
-      "Implementing"|"Writing tests") step_color="$MAGENTA" ;;
-      "Testing"|"Linting") step_color="$YELLOW" ;;
-      "Staging"|"Committing") step_color="$GREEN" ;;
-      *) step_color="$BLUE" ;;
-    esac
+    local step_color
+    step_color=$(get_step_color "$current_step")
 
     # Use tput for cleaner line clearing
     tput cr 2>/dev/null || printf "\r"
@@ -1915,7 +1849,7 @@ monitor_progress() {
 # ============================================
 
 notify_done() {
-  local message="${1:-Ralphy has completed all tasks!}"
+  local message="${1:-GRALPH has completed all tasks!}"
   
   # macOS
   if command -v afplay &>/dev/null; then
@@ -1924,12 +1858,12 @@ notify_done() {
   
   # macOS notification
   if command -v osascript &>/dev/null; then
-    osascript -e "display notification \"$message\" with title \"Ralphy\"" 2>/dev/null || true
+    osascript -e "display notification \"$message\" with title \"GRALPH\"" 2>/dev/null || true
   fi
   
   # Linux (notify-send)
   if command -v notify-send &>/dev/null; then
-    notify-send "Ralphy" "$message" 2>/dev/null || true
+    notify-send "GRALPH" "$message" 2>/dev/null || true
   fi
   
   # Linux (paplay for sound)
@@ -1944,16 +1878,16 @@ notify_done() {
 }
 
 notify_error() {
-  local message="${1:-Ralphy encountered an error}"
+  local message="${1:-GRALPH encountered an error}"
   
   # macOS
   if command -v osascript &>/dev/null; then
-    osascript -e "display notification \"$message\" with title \"Ralphy - Error\"" 2>/dev/null || true
+    osascript -e "display notification \"$message\" with title \"GRALPH - Error\"" 2>/dev/null || true
   fi
   
   # Linux
   if command -v notify-send &>/dev/null; then
-    notify-send -u critical "Ralphy - Error" "$message" 2>/dev/null || true
+    notify-send -u critical "GRALPH - Error" "$message" 2>/dev/null || true
   fi
 }
 
@@ -2046,43 +1980,96 @@ If ALL tasks in the PRD are complete, output <promise>COMPLETE</promise>."
 # AI ENGINE ABSTRACTION
 # ============================================
 
+# Execute AI prompt with unified interface
+# Args:
+#   $1 = prompt
+#   $2 = output_file
+#   $3 = options string (optional): "async" "wd=/path" "log=/path" "tee=/path"
+# Example: execute_ai_prompt "$prompt" "$out" "async wd=$worktree_dir log=$logfile"
+execute_ai_prompt() {
+  local prompt="$1"
+  local output_file="$2"
+  local options="${3:-}"
+
+  # Parse options
+  local async=false
+  local working_dir=""
+  local log_file=""
+  local tee_file=""
+
+  for opt in $options; do
+    case "$opt" in
+      async) async=true ;;
+      wd=*) working_dir="${opt#wd=}" ;;
+      log=*) log_file="${opt#log=}" ;;
+      tee=*) tee_file="${opt#tee=}" ;;
+    esac
+  done
+
+  # Build command as an array to avoid eval/quoting issues
+  local -a cmd=()
+  case "$AI_ENGINE" in
+    opencode)
+      cmd=(env OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json)
+      [[ -n "$OPENCODE_MODEL" ]] && cmd+=(--model "$OPENCODE_MODEL")
+      cmd+=("$prompt")
+      ;;
+    cursor)
+      cmd=(agent --print --force --output-format stream-json "$prompt")
+      ;;
+    codex)
+      cmd=(codex exec --full-auto --json "$prompt")
+      ;;
+    *)
+      cmd=(claude --dangerously-skip-permissions --verbose -p "$prompt" --output-format stream-json)
+      ;;
+  esac
+
+  run_cmd() {
+    if [[ -n "$tee_file" ]]; then
+      if [[ -n "$log_file" ]]; then
+        "${cmd[@]}" 2>>"$log_file" | tee -a "$tee_file" >"$output_file"
+      else
+        "${cmd[@]}" 2>&1 | tee -a "$tee_file" >"$output_file"
+      fi
+      return
+    fi
+
+    if [[ -n "$log_file" ]]; then
+      "${cmd[@]}" >"$output_file" 2>>"$log_file"
+    else
+      "${cmd[@]}" >"$output_file"
+    fi
+  }
+
+  if [[ -n "$working_dir" ]]; then
+    if [[ "$async" == true ]]; then
+      (cd "$working_dir" && run_cmd) &
+      ai_pid=$!
+    else
+      (cd "$working_dir" && run_cmd)
+    fi
+  else
+    if [[ "$async" == true ]]; then
+      run_cmd &
+      ai_pid=$!
+    else
+      run_cmd
+    fi
+  fi
+}
+
 run_ai_command() {
   local prompt=$1
   local output_file=$2
   
-  case "$AI_ENGINE" in
-    opencode)
-      # OpenCode: use 'run' command with JSON format and permissive settings
-      if [[ -n "$OPENCODE_MODEL" ]]; then
-        OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json --model "$OPENCODE_MODEL" "$prompt" > "$output_file" 2>&1 &
-      else
-        OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json "$prompt" > "$output_file" 2>&1 &
-      fi
-      ;;
-    cursor)
-      # Cursor agent: use --print for non-interactive, --force to allow all commands
-      agent --print --force \
-        --output-format stream-json \
-        "$prompt" > "$output_file" 2>&1 &
-      ;;
-    codex)
-      CODEX_LAST_MESSAGE_FILE="${output_file}.last"
-      rm -f "$CODEX_LAST_MESSAGE_FILE"
-      codex exec --full-auto \
-        --json \
-        --output-last-message "$CODEX_LAST_MESSAGE_FILE" \
-        "$prompt" > "$output_file" 2>&1 &
-      ;;
-    *)
-      # Claude Code: use existing approach
-      claude --dangerously-skip-permissions \
-        --verbose \
-        --output-format stream-json \
-        -p "$prompt" > "$output_file" 2>&1 &
-      ;;
-  esac
+  # Special handling for Codex last message file
+  if [[ "$AI_ENGINE" == "codex" ]]; then
+    CODEX_LAST_MESSAGE_FILE="${output_file}.last"
+    rm -f "$CODEX_LAST_MESSAGE_FILE"
+  fi
   
-  ai_pid=$!
+  execute_ai_prompt "$prompt" "$output_file" "async"
 }
 
 parse_ai_result() {
@@ -2377,7 +2364,7 @@ run_single_task() {
 
     # Create PR if requested
     if [[ "$CREATE_PR" == true ]] && [[ -n "$branch_name" ]]; then
-      create_pull_request "$branch_name" "$current_task" "Automated implementation by Ralphy"
+      create_pull_request "$branch_name" "$current_task" "Automated implementation by GRALPH"
     fi
 
     # Return to base branch
@@ -2413,7 +2400,7 @@ run_single_task() {
 create_agent_worktree() {
   local task_name="$1"
   local agent_num="$2"
-  local branch_name="ralphy/agent-${agent_num}-$(slugify "$task_name")"
+  local branch_name="gralph/agent-${agent_num}-$(slugify "$task_name")"
   local worktree_dir="${WORKTREE_BASE}/agent-${agent_num}"
   
   # Run git commands from original directory
@@ -2544,48 +2531,15 @@ Focus only on implementing: $task_name"
   local success=false
   local retry=0
   
-  # Set up tee for streaming if stream_file is provided
-  local tee_cmd="cat"
-  if [[ -n "$stream_file" ]]; then
-    tee_cmd="tee -a $stream_file"
-  fi
-  
   while [[ $retry -lt $MAX_RETRIES ]]; do
     # Clear stream file on each retry
     [[ -n "$stream_file" ]] && : > "$stream_file"
     
-    case "$AI_ENGINE" in
-      opencode)
-        if [[ -n "$OPENCODE_MODEL" ]]; then
-          (cd "$worktree_dir" && OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json --model "$OPENCODE_MODEL" "$prompt") 2>>"$log_file" | $tee_cmd > "$tmpfile"
-        else
-          (cd "$worktree_dir" && OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json "$prompt") 2>>"$log_file" | $tee_cmd > "$tmpfile"
-        fi
-        ;;
-      cursor)
-        (cd "$worktree_dir" && agent --print --force --output-format stream-json "$prompt") 2>>"$log_file" | $tee_cmd > "$tmpfile"
-        ;;
-      codex)
-        (
-          cd "$worktree_dir"
-          CODEX_LAST_MESSAGE_FILE="$tmpfile.last"
-          rm -f "$CODEX_LAST_MESSAGE_FILE"
-          codex exec --full-auto \
-            --json \
-            --output-last-message "$CODEX_LAST_MESSAGE_FILE" \
-            "$prompt"
-        ) 2>>"$log_file" | $tee_cmd > "$tmpfile"
-        ;;
-      *)
-        (
-          cd "$worktree_dir"
-          claude --dangerously-skip-permissions \
-            --verbose \
-            -p "$prompt" \
-            --output-format stream-json
-        ) 2>>"$log_file" | $tee_cmd > "$tmpfile"
-        ;;
-    esac
+    # Build options for execute_ai_prompt
+    local ai_opts="wd=$worktree_dir log=$log_file"
+    [[ -n "$stream_file" ]] && ai_opts="$ai_opts tee=$stream_file"
+    
+    execute_ai_prompt "$prompt" "$tmpfile" "$ai_opts"
     
     result=$(cat "$tmpfile" 2>/dev/null || echo "")
     
@@ -2642,7 +2596,7 @@ Focus only on implementing: $task_name"
           --base "$BASE_BRANCH" \
           --head "$branch_name" \
           --title "$task_name" \
-          --body "Automated implementation by Ralphy (Agent $agent_num)" \
+          --body "Automated implementation by GRALPH (Agent $agent_num)" \
           ${PR_DRAFT:+--draft} 2>>"$log_file" || true
       )
     fi
@@ -2655,22 +2609,29 @@ Focus only on implementing: $task_name"
       # Read progress notes from worktree
       local progress_notes=""
       if [[ -f "$worktree_dir/progress.txt" ]]; then
-        progress_notes=$(cat "$worktree_dir/progress.txt" 2>/dev/null | tail -50 | sed 's/"/\\"/g' | tr '\n' ' ')
+        progress_notes=$(cat "$worktree_dir/progress.txt" 2>/dev/null | tail -50)
       fi
       
       local task_id_slug
       task_id_slug=$(echo "$task_name" | sed 's/[^a-zA-Z0-9]/-/g' | cut -c1-30)
       
+      # Escape strings for valid JSON
+      local safe_title safe_branch safe_changed safe_notes
+      safe_title=$(json_escape "$task_name")
+      safe_branch=$(json_escape "$branch_name")
+      safe_changed=$(json_escape "$changed_files")
+      safe_notes=$(json_escape "$progress_notes")
+      
       mkdir -p "$ORIGINAL_DIR/$ARTIFACTS_DIR/reports"
       cat > "$ORIGINAL_DIR/$ARTIFACTS_DIR/reports/agent-${agent_num}-${task_id_slug}.json" << EOF
 {
   "taskId": "agent-$agent_num",
-  "title": "$task_name",
-  "branch": "$branch_name",
+  "title": "$safe_title",
+  "branch": "$safe_branch",
   "status": "done",
   "commits": $commit_count,
-  "changedFiles": "$changed_files",
-  "progressNotes": "$progress_notes",
+  "changedFiles": "$safe_changed",
+  "progressNotes": "$safe_notes",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF
@@ -2754,40 +2715,17 @@ Focus only on implementing: $task_title"
   tmpfile=$(mktemp)
   local result="" success=false retry=0
   
-  # Set up tee for streaming if stream_file is provided
-  local tee_cmd="cat"
-  if [[ -n "$stream_file" ]]; then
-    tee_cmd="tee -a $stream_file"
-  fi
-  
   while [[ $retry -lt $MAX_RETRIES ]]; do
-    echo "[DEBUG] Retry $retry, running $AI_ENGINE in $worktree_dir" >> "$log_file"
+    log_debug "Retry $retry, running $AI_ENGINE in $worktree_dir"
     
     # Clear stream file on each retry
     [[ -n "$stream_file" ]] && : > "$stream_file"
     
-    case "$AI_ENGINE" in
-      opencode)
-        echo "[DEBUG] About to run opencode with model=$OPENCODE_MODEL" >> "$log_file"
-        if [[ -n "$OPENCODE_MODEL" ]]; then
-          echo "[DEBUG] Running: opencode run --format json --model $OPENCODE_MODEL" >> "$log_file"
-          (cd "$worktree_dir" && opencode run --format json --model "$OPENCODE_MODEL" "$prompt") 2>>"$log_file" | $tee_cmd > "$tmpfile"
-        else
-          echo "[DEBUG] Running: opencode run --format json (no model)" >> "$log_file"
-          (cd "$worktree_dir" && opencode run --format json "$prompt") 2>>"$log_file" | $tee_cmd > "$tmpfile"
-        fi
-        echo "[DEBUG] opencode finished, exit code: $?" >> "$log_file"
-        ;;
-      cursor)
-        (cd "$worktree_dir" && agent --print --force --output-format stream-json "$prompt") 2>>"$log_file" | $tee_cmd > "$tmpfile"
-        ;;
-      codex)
-        (cd "$worktree_dir" && codex exec --full-auto --json "$prompt") 2>>"$log_file" | $tee_cmd > "$tmpfile"
-        ;;
-      *)
-        (cd "$worktree_dir" && claude --dangerously-skip-permissions --verbose -p "$prompt" --output-format stream-json) 2>>"$log_file" | $tee_cmd > "$tmpfile"
-        ;;
-    esac
+    # Build options for execute_ai_prompt
+    local ai_opts="wd=$worktree_dir log=$log_file"
+    [[ -n "$stream_file" ]] && ai_opts="$ai_opts tee=$stream_file"
+    
+    execute_ai_prompt "$prompt" "$tmpfile" "$ai_opts"
     
     result=$(cat "$tmpfile" 2>/dev/null || echo "")
     if [[ -n "$result" ]]; then
@@ -2801,7 +2739,6 @@ Focus only on implementing: $task_title"
   done
   
   rm -f "$tmpfile"
-  
   
   if [[ "$success" == true ]]; then
     local commit_count
@@ -2827,19 +2764,26 @@ Focus only on implementing: $task_title"
       # Read progress notes from worktree
       local progress_notes=""
       if [[ -f "$worktree_dir/progress.txt" ]]; then
-        progress_notes=$(cat "$worktree_dir/progress.txt" 2>/dev/null | tail -50 | sed 's/"/\\"/g' | tr '\n' ' ')
+        progress_notes=$(cat "$worktree_dir/progress.txt" 2>/dev/null | tail -50)
       fi
+      
+      # Escape strings for valid JSON
+      local safe_title safe_branch safe_changed safe_notes
+      safe_title=$(json_escape "$task_title")
+      safe_branch=$(json_escape "$branch_name")
+      safe_changed=$(json_escape "$changed_files")
+      safe_notes=$(json_escape "$progress_notes")
       
       mkdir -p "$ORIGINAL_DIR/$ARTIFACTS_DIR/reports"
       cat > "$ORIGINAL_DIR/$ARTIFACTS_DIR/reports/$task_id.json" << EOF
 {
   "taskId": "$task_id",
-  "title": "$task_title",
-  "branch": "$branch_name",
+  "title": "$safe_title",
+  "branch": "$safe_branch",
   "status": "done",
   "commits": $commit_count,
-  "changedFiles": "$changed_files",
-  "progressNotes": "$progress_notes",
+  "changedFiles": "$safe_changed",
+  "progressNotes": "$safe_notes",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF
@@ -3620,30 +3564,7 @@ Be careful to preserve functionality from BOTH branches. The goal is to integrat
           local resolve_tmpfile
           resolve_tmpfile=$(mktemp)
           
-          case "$AI_ENGINE" in
-            opencode)
-              if [[ -n "$OPENCODE_MODEL" ]]; then
-                OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json --model "$OPENCODE_MODEL" "$resolve_prompt" > "$resolve_tmpfile" 2>&1
-              else
-                OPENCODE_PERMISSION='{"*":"allow"}' opencode run --format json "$resolve_prompt" > "$resolve_tmpfile" 2>&1
-              fi
-              ;;
-            cursor)
-              agent --print --force \
-                --output-format stream-json \
-                "$resolve_prompt" > "$resolve_tmpfile" 2>&1
-              ;;
-            codex)
-              codex exec --full-auto \
-                --json \
-                "$resolve_prompt" > "$resolve_tmpfile" 2>&1
-              ;;
-            *)
-              claude --dangerously-skip-permissions \
-                -p "$resolve_prompt" \
-                --output-format stream-json > "$resolve_tmpfile" 2>&1
-              ;;
-          esac
+          execute_ai_prompt "$resolve_prompt" "$resolve_tmpfile"
           
           rm -f "$resolve_tmpfile"
           
@@ -3770,7 +3691,7 @@ main() {
   
   # Show banner
   echo "${BOLD}============================================${RESET}"
-  echo "${BOLD}Ralphy${RESET} - Running until PRD is complete"
+  echo "${BOLD}GRALPH${RESET} - Running until PRD is complete"
   local engine_display
   case "$AI_ENGINE" in
     opencode) engine_display="${CYAN}OpenCode${RESET}" ;;
@@ -3805,7 +3726,7 @@ main() {
       run_parallel_tasks || parallel_result=$?
     fi
     if [[ "$parallel_result" -ne 0 ]]; then
-      notify_error "Ralphy stopped due to external failure or deadlock"
+      notify_error "GRALPH stopped due to external failure or deadlock"
       exit "$parallel_result"
     fi
     show_summary
@@ -3839,7 +3760,7 @@ main() {
     if [[ $MAX_ITERATIONS -gt 0 ]] && [[ $iteration -ge $MAX_ITERATIONS ]]; then
       log_warn "Reached max iterations ($MAX_ITERATIONS)"
       show_summary
-      notify_done "Ralphy stopped after $MAX_ITERATIONS iterations"
+      notify_done "GRALPH stopped after $MAX_ITERATIONS iterations"
       exit 0
     fi
     

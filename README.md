@@ -1,4 +1,4 @@
-# gralph — Parallel AI coding runner (inspired by Ralph)
+# GRALPH — Parallel AI coding runner (inspired by Ralph)
 
 ![gralph](assets/gralph.png)
 
@@ -10,7 +10,7 @@ gralph reads tasks, schedules them with dependencies and mutexes, runs multiple 
 
 ## Project status
 
-This repo is in active development. The entrypoint script is currently `ralph.sh` while the project is being migrated/renamed to **gralph**.
+This repo is in active development. The entrypoint script is `gralph.sh` and the rename to **GRALPH** is complete.
 
 ## Features
 
@@ -65,7 +65,7 @@ This is intentionally simple:
 
 Each task runs in:
 - a **fresh git worktree** (isolated filesystem)
-- a **fresh branch** (typically `ralphy/agent-<n>-<task-slug>`)
+- a **fresh branch** (typically `gralph/agent-<n>-<task-slug>`)
 
 This gives “parallel write isolation”: agents don’t trample each other’s working directories.
 
@@ -111,7 +111,7 @@ What it does not guarantee:
 ```bash
 git clone https://github.com/juanfra/central-ralph.git
 cd central-ralph
-chmod +x ralph.sh
+chmod +x gralph.sh
 ```
 
 ### Requirements
@@ -132,7 +132,7 @@ gralph uses “skills” as reusable instruction bundles per engine.
 Install missing skills for your selected engine:
 
 ```bash
-./ralph.sh --init
+./gralph.sh --init
 ```
 
 Skills currently used:
@@ -150,7 +150,7 @@ The intended workflow is:
 1) Write a PRD (or provide a `tasks.yaml`), 2) run gralph, 3) inspect artifacts/branches, 4) merge/PR as needed.
 
 ```bash
-./ralph.sh --yaml examples/personal-landing/tasks.yaml --parallel --opencode
+./gralph.sh --yaml examples/personal-landing/tasks.yaml --parallel --opencode
 ```
 
 If you pass a `--yaml` file that does not exist, gralph will try to generate it from a `PRD.md` in the current directory automatically.
@@ -180,21 +180,21 @@ Full schema: `docs/tasks-yaml-v1.md`.
 
 ```bash
 # Example: run the included landing page tasks (YAML v1 + parallel)
-./ralph.sh --yaml examples/personal-landing/tasks.yaml --parallel
+./gralph.sh --yaml examples/personal-landing/tasks.yaml --parallel
 
 # Use a specific engine
-./ralph.sh --opencode --parallel
+./gralph.sh --opencode --parallel
 
 # Limit parallelism
-./ralph.sh --parallel --max-parallel 2
+./gralph.sh --parallel --max-parallel 2
 
 # Run sequentially
-./ralph.sh --yaml examples/personal-landing/tasks.yaml
+./gralph.sh --yaml examples/personal-landing/tasks.yaml
 ```
 
 ## Configuration
 
-Common flags (see `./ralph.sh --help` for the full list):
+Common flags (see `./gralph.sh --help` for the full list):
 
 | Flag | Description |
 | --- | --- |
