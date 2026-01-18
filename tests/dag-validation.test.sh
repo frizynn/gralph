@@ -49,12 +49,10 @@ tasks:
     title: First task
     completed: false
     dependsOn: []
-    mutex: []
   - id: US-002
     title: Second task
     completed: false
     dependsOn: ["US-001"]
-    mutex: []
 EOF
   
   # Should have version 1
@@ -75,12 +73,10 @@ tasks:
     title: First
     completed: false
     dependsOn: []
-    mutex: []
   - id: US-001
     title: Duplicate
     completed: false
     dependsOn: []
-    mutex: []
 EOF
   
   local ids
@@ -102,7 +98,6 @@ tasks:
     title: Task with dep
     completed: false
     dependsOn: ["US-001"]
-    mutex: []
 EOF
   
   local dep

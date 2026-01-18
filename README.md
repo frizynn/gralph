@@ -6,7 +6,7 @@ gralph is a fast, parallel AI coding runner. It was inspired by Ralph (credit wh
 
 ## Overview
 
-gralph reads tasks, schedules them with dependencies and mutexes, runs multiple agents in isolated git worktrees, and produces actionable artifacts (logs + reports). It aims to trade single-agent depth for throughput while keeping runs debuggable.
+gralph reads tasks, schedules them with dependencies, runs multiple agents in isolated git worktrees, and produces actionable artifacts (logs + reports). It aims to trade single-agent depth for throughput while keeping runs debuggable.
 
 ## Project status
 
@@ -14,7 +14,7 @@ This repo is in active development. The entrypoint script is `gralph.sh` and the
 
 ## Features
 
-- DAG scheduling with `dependsOn` and `mutex`
+- DAG scheduling with `dependsOn`
 - Parallel agents in isolated worktrees
 - Task artifacts: JSON reports + logs
 - External-failure fail-fast with graceful stop + timeout
@@ -26,7 +26,6 @@ This repo is in active development. The entrypoint script is `gralph.sh` and the
 gralph’s “parallelism” is not “run everything at once”. It’s a **best-effort scheduler** that tries to maximize throughput while avoiding obvious conflicts:
 
 - **Hard deps**: `dependsOn` edges form a DAG (task can’t run until deps are `done`).
-- **Mutex locks**: tasks can declare shared resources (e.g. `lockfile`, `router`, `global-config`) so only one task holds that lock at a time.
 - **Slot limit**: `--max-parallel N` caps concurrency even if many tasks are runnable.
 
 High-level pipeline:
@@ -52,13 +51,12 @@ flowchart TD
 At any point in time a task is runnable (“ready”) only if:
 
 - **All deps are done**: for every `dep` in `dependsOn`, `SCHED_STATE[dep] == done`
-- **All mutexes are free**: none of its `mutex` entries are currently locked by another running task
 - **There is a free slot**: current running < `--max-parallel`
 
 If multiple tasks are ready, gralph starts up to `slots_available` of them.
 
 This is intentionally simple:
-- It prevents obvious shared-resource contention (e.g. two tasks rewriting the lockfile).
+- It enforces dependency order.
 - It does **not** guarantee semantic compatibility across tasks (that’s why there is an integration + reviewer stage).
 
 ### 3) Execution model (worktrees + branches)
@@ -155,7 +153,7 @@ The intended workflow is:
 
 If you pass a `--yaml` file that does not exist, gralph will try to generate it from a `PRD.md` in the current directory automatically.
 
-### Recommended: tasks.yaml v1 (DAG + mutex)
+### Recommended: tasks.yaml v1 (DAG)
 
 Example:
 
@@ -166,12 +164,10 @@ tasks:
     title: "Initialize project structure and dependencies"
     completed: false
     dependsOn: []
-    mutex: ["lockfile"]
   - id: US-001
     title: "Build hero section"
     completed: false
     dependsOn: ["SETUP-001"]
-    mutex: []
 ```
 
 Full schema: `docs/tasks-yaml-v1.md`.

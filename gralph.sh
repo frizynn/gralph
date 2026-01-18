@@ -883,7 +883,7 @@ get_tasks_in_group_yaml() {
 }
 
 # ============================================
-# YAML V1 VALIDATION (DAG + MUTEX)
+# YAML V1 VALIDATION (DAG)
 # ============================================
 
 # Check if tasks.yaml uses v1 format
@@ -921,12 +921,6 @@ get_task_deps_by_id_yaml_v1() {
   yq -r ".tasks[] | select(.id == \"$id\") | .dependsOn[]?" "$PRD_FILE" 2>/dev/null
 }
 
-# Get task mutex by ID
-get_task_mutex_by_id_yaml_v1() {
-  local id=$1
-  yq -r ".tasks[] | select(.id == \"$id\") | .mutex[]?" "$PRD_FILE" 2>/dev/null
-}
-
 # Check if task is completed
 is_task_completed_yaml_v1() {
   local id=$1
@@ -941,37 +935,6 @@ mark_task_complete_by_id_yaml_v1() {
   yq -i "(.tasks[] | select(.id == \"$id\")).completed = true" "$PRD_FILE"
 }
 
-# Load mutex catalog
-load_mutex_catalog() {
-  local catalog_file="${ORIGINAL_DIR:-$(pwd)}/mutex-catalog.json"
-  if [[ ! -f "$catalog_file" ]]; then
-    # Return empty if no catalog (allow any mutex)
-    echo ""
-    return
-  fi
-  # Return list of valid mutex names
-  jq -r '.mutex | keys[]' "$catalog_file" 2>/dev/null
-}
-
-# Check if mutex is valid (in catalog or matches contract:* pattern)
-is_valid_mutex() {
-  local mutex=$1
-  local catalog=$2
-  
-  # contract:* pattern is always valid
-  if [[ "$mutex" == contract:* ]]; then
-    return 0
-  fi
-  
-  # Check against catalog
-  if [[ -z "$catalog" ]]; then
-    # No catalog = allow all
-    return 0
-  fi
-  
-  echo "$catalog" | grep -qx "$mutex"
-}
-
 # Validate tasks.yaml v1 schema
 validate_tasks_yaml_v1() {
   local errors=()
@@ -982,10 +945,6 @@ validate_tasks_yaml_v1() {
   if [[ "$version" != "1" ]]; then
     errors+=("version must be 1 (got: $version)")
   fi
-  
-  # Load mutex catalog
-  local mutex_catalog
-  mutex_catalog=$(load_mutex_catalog)
   
   # Get all task IDs for dependency checking
   local all_ids=()
@@ -1030,13 +989,6 @@ validate_tasks_yaml_v1() {
       fi
     done < <(yq -r ".tasks[$i].dependsOn[]?" "$PRD_FILE" 2>/dev/null)
     
-    # Validate mutex
-    while IFS= read -r mutex; do
-      [[ -z "$mutex" ]] && continue
-      if ! is_valid_mutex "$mutex" "$mutex_catalog"; then
-        errors+=("Task $id: unknown mutex '$mutex'")
-      fi
-    done < <(yq -r ".tasks[$i].mutex[]?" "$PRD_FILE" 2>/dev/null)
   done
   
   # Check for cycles
@@ -1132,12 +1084,10 @@ detect_cycles_yaml_v1() {
 
 # Global scheduler state (arrays for bash 3.x compat, but we use bash 4+ features)
 declare -A SCHED_STATE      # task_id -> pending|running|done|failed
-declare -A SCHED_LOCKED     # mutex -> task_id (who holds it)
 
 # Initialize scheduler state
 scheduler_init_yaml_v1() {
   SCHED_STATE=()
-  SCHED_LOCKED=()
   
   while IFS= read -r id; do
     [[ -z "$id" ]] && continue
@@ -1162,43 +1112,12 @@ scheduler_deps_satisfied() {
   return 0
 }
 
-# Check if task can acquire its mutex
-scheduler_mutex_available() {
-  local id=$1
-  while IFS= read -r mutex; do
-    [[ -z "$mutex" ]] && continue
-    # Use :- to provide default empty value (fixes set -u unbound variable)
-    if [[ -n "${SCHED_LOCKED[$mutex]:-}" ]]; then
-      return 1
-    fi
-  done < <(get_task_mutex_by_id_yaml_v1 "$id")
-  return 0
-}
-
-# Lock mutex for a task
-scheduler_lock_mutex() {
-  local id=$1
-  while IFS= read -r mutex; do
-    [[ -z "$mutex" ]] && continue
-    SCHED_LOCKED[$mutex]=$id
-  done < <(get_task_mutex_by_id_yaml_v1 "$id")
-}
-
-# Unlock mutex for a task
-scheduler_unlock_mutex() {
-  local id=$1
-  while IFS= read -r mutex; do
-    [[ -z "$mutex" ]] && continue
-    unset "SCHED_LOCKED[$mutex]"
-  done < <(get_task_mutex_by_id_yaml_v1 "$id")
-}
-
-# Get ready tasks (deps satisfied and mutex available)
+# Get ready tasks (deps satisfied)
 scheduler_get_ready() {
   local ready=()
   for id in "${!SCHED_STATE[@]}"; do
     if [[ "${SCHED_STATE[$id]}" == "pending" ]]; then
-      if scheduler_deps_satisfied "$id" && scheduler_mutex_available "$id"; then
+      if scheduler_deps_satisfied "$id"; then
         ready+=("$id")
       fi
     fi
@@ -1228,25 +1147,22 @@ scheduler_count_pending() {
 scheduler_start_task() {
   local id=$1
   SCHED_STATE[$id]="running"
-  scheduler_lock_mutex "$id"
-  log_debug "Task $id: pending → running (mutex locked)"
+  log_debug "Task $id: pending → running"
 }
 
 # Mark task as done
 scheduler_complete_task() {
   local id=$1
   SCHED_STATE[$id]="done"
-  scheduler_unlock_mutex "$id"
   mark_task_complete_by_id_yaml_v1 "$id"
-  log_debug "Task $id: running → done (mutex released)"
+  log_debug "Task $id: running → done"
 }
 
 # Mark task as failed
 scheduler_fail_task() {
   local id=$1
   SCHED_STATE[$id]="failed"
-  scheduler_unlock_mutex "$id"
-  log_debug "Task $id: running → failed (mutex released)"
+  log_debug "Task $id: running → failed"
 }
 
 # Explain why a task is blocked
@@ -1265,20 +1181,6 @@ scheduler_explain_block() {
   
   if [[ ${#blocked_deps[@]} -gt 0 ]]; then
     reasons+=("dependsOn: ${blocked_deps[*]}")
-  fi
-  
-  # Check mutex
-  local blocked_mutex=()
-  while IFS= read -r mutex; do
-    [[ -z "$mutex" ]] && continue
-    # Use :- to provide default empty value (fixes set -u unbound variable)
-    if [[ -n "${SCHED_LOCKED[$mutex]:-}" ]]; then
-      blocked_mutex+=("$mutex (held by ${SCHED_LOCKED[$mutex]:-})")
-    fi
-  done < <(get_task_mutex_by_id_yaml_v1 "$id")
-  
-  if [[ ${#blocked_mutex[@]} -gt 0 ]]; then
-    reasons+=("mutex: ${blocked_mutex[*]}")
   fi
   
   if [[ ${#reasons[@]} -gt 0 ]]; then
@@ -1352,19 +1254,16 @@ tasks:
     title: \"First task description\"
     completed: false
     dependsOn: []
-    mutex: []
   - id: TASK-002
     title: \"Second task description\"  
     completed: false
     dependsOn: [\"TASK-001\"]
-    mutex: []
 
 Rules:
 1. Each task gets a unique ID (TASK-001, TASK-002, etc.)
 2. Order tasks by dependency (database first, then backend, then frontend)
 3. Use dependsOn to link tasks that must run after others
-4. Use mutex for shared resources: db-migrations, lockfile, router, global-config
-5. Keep tasks small and focused (completable in one session)
+4. Keep tasks small and focused (completable in one session)
 
 Save the file as tasks.yaml in the current directory.
 Do NOT implement anything - only create the tasks.yaml file."
@@ -1578,8 +1477,7 @@ generate_fix_tasks() {
       \"id\": \"FIX-$(printf '%03d' $fix_num)\",
       \"title\": \"Fix: $desc\",
       \"completed\": false,
-      \"dependsOn\": [],
-      \"mutex\": []
+      \"dependsOn\": []
     }]" "$PRD_FILE"
     
     fix_num=$((fix_num + 1))

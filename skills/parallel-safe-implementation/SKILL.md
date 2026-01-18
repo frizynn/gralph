@@ -13,9 +13,8 @@ Guidelines for implementing tasks in Ralph parallel mode without causing conflic
 
 1. Implement assigned task completely
 2. Stay within declared `touches` paths
-3. Respect mutex boundaries
-4. Avoid undeclared hotspots
-5. Commit atomically with clear messages
+3. Avoid undeclared hotspots
+4. Commit atomically with clear messages
 
 **Do NOT:** modify DAG, schedule tasks, merge branches, or review other work.
 
@@ -34,17 +33,13 @@ touches: ["src/auth/**", "tests/auth/**"]
 **Allowed:** `src/auth/middleware.ts`, `tests/auth/login.test.ts`
 **Forbidden:** `src/api/routes.ts`, `package.json`
 
-### 2. Respect Mutex
+### 2. Avoid Hotspots
 
-If your task has `mutex: ["db-migrations"]`, you have exclusive access to that resource. Other tasks with the same mutex will wait.
-
-### 3. Avoid Hotspots
-
-Never touch these without explicit mutex:
-- `package.json` / `package-lock.json` → mutex: `lockfile`
-- Database migrations → mutex: `db-migrations`
-- Route configuration → mutex: `router`
-- Global config files → mutex: `global-config`
+Never touch these unless they are explicitly in `touches` (or `allowedToModify`, if used):
+- `package.json` / `package-lock.json`
+- Database migrations
+- Route configuration files
+- Global config files
 
 ---
 
@@ -53,7 +48,6 @@ Never touch these without explicit mutex:
 Before starting:
 - [ ] Read task description and acceptance criteria
 - [ ] Check `touches` for allowed paths
-- [ ] Check `mutex` for exclusive resources
 - [ ] Check `dependsOn` to understand available interfaces
 
 While implementing:
@@ -101,7 +95,7 @@ various fixes
 - Refactor unrelated code
 - Change file structure outside scope
 - Modify global types without contract declaration
-- Add dependencies without lockfile mutex
+- Add dependencies without explicit task scope
 
 ---
 
@@ -118,7 +112,6 @@ Files changed: 4
   + tests/auth/middleware.test.ts (new)
   
 Within declared touches: ✓
-Mutex used: contract:auth-api
 ```
 
 ---
@@ -128,12 +121,11 @@ Mutex used: contract:auth-api
 ```
 Pre-implementation safety check:
   ✓ touches: ["src/auth/**"] - clear scope
-  ✓ mutex: ["contract:auth-api"] - exclusive access
   ✓ dependsOn: ["AUTH-001"] - user table available
   
   Hotspots to avoid:
-    ✗ package.json (no lockfile mutex)
-    ✗ db/migrations/** (no db-migrations mutex)
+    ✗ package.json (not in touches)
+    ✗ db/migrations/** (not in touches)
     
   Ready to implement safely
 ```

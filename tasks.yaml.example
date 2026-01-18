@@ -3,19 +3,17 @@
 
 version: 1
 tasks:
-  # Database layer - no dependencies, uses db-migrations mutex
+  # Database layer - no dependencies
   - id: DB-001
     title: Add users table migration
     completed: false
     dependsOn: []
-    mutex: ["db-migrations"]
     touches: ["db/migrations/**"]
     
   - id: DB-002
     title: Add sessions table migration
     completed: false
     dependsOn: ["DB-001"]  # Users must exist first
-    mutex: ["db-migrations"]
     touches: ["db/migrations/**"]
 
   # Auth layer - depends on DB, produces auth contract
@@ -23,19 +21,17 @@ tasks:
     title: Create auth middleware
     completed: false
     dependsOn: ["DB-001"]
-    mutex: ["contract:auth-api"]
     touches: ["src/auth/**"]
     contracts:
       produces: ["contract:auth-api"]
       consumes: []
     mergeNotes: "Maintain backward compatibility with existing endpoints"
 
-  # API layer - can run in parallel, no shared mutex
+  # API layer - can run in parallel
   - id: API-001
     title: Add user profile endpoint
     completed: false
     dependsOn: ["AUTH-001"]
-    mutex: []
     touches: ["src/api/users/**"]
     contracts:
       produces: []
@@ -45,7 +41,6 @@ tasks:
     title: Add settings endpoint
     completed: false
     dependsOn: ["AUTH-001"]
-    mutex: []
     touches: ["src/api/settings/**"]
     contracts:
       produces: []
@@ -56,6 +51,5 @@ tasks:
     title: Create profile page
     completed: false
     dependsOn: ["API-001"]
-    mutex: []
     touches: ["src/pages/profile/**", "src/components/profile/**"]
     verify: ["npm run typecheck", "npm test"]

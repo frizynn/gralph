@@ -190,7 +190,6 @@ For blockers and critical issues, generate fix tasks:
   title: "Fix type mismatch in auth middleware"
   completed: false
   dependsOn: []
-  mutex: ["contract:auth-api"]
   touches: ["src/auth/middleware.ts", "src/types/user.ts"]
   mergeNotes: "This fixes ISSUE-001 from review"
 ```

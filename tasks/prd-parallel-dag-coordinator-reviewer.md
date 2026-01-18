@@ -19,7 +19,6 @@ Esta PRD define un plan **por etapas** para evitar sobrediseño y llegar a un si
 - Modelar explícitamente dependencias en un **DAG de tareas** (no de archivos).
 - Introducir metadata por tarea para:
   - dependencias duras,
-  - exclusión por recursos (`mutex`),
   - “touched areas” (`touches`) como heurística de conflicto textual,
   - contratos producidos/consumidos para detectar conflictos semánticos.
 - Añadir “gates” de verificación para no marcar tareas como completas si:
@@ -42,10 +41,9 @@ Esta PRD define un plan **por etapas** para evitar sobrediseño y llegar a un si
 ## 5. Conceptos clave (definiciones)
 
 - **DAG de tareas**: nodos = tareas; edges = `dependsOn` (dependencia dura).
-- **Mutex (recurso lógico)**: etiqueta de exclusión para recursos críticos compartidos. No es un archivo, es una categoría (ej. `db-migrations`, `lockfile`, `router`, `contract:auth-api`).
 - **Touches**: lista de paths/módulos estimados; sirve como heurística para evitar solapes textuales, no como garantía.
 - **Contrato**: interfaz compartida (API, schema, tipos, eventos). Puede cambiar de forma compatible o breaking.
-- **Coordinator**: componente que construye/valida el DAG, planifica la ejecución, aplica mutex, recopila resultados y coordina merge/validación.
+- **Coordinator**: componente que construye/valida el DAG, planifica la ejecución, recopila resultados y coordina merge/validación.
 - **Reviewer**: etapa posterior que analiza cambios integrados (diffs + reportes por tarea) para detectar problemas semánticos/diseño y generar tareas correctivas.
 
 ## 6. Arquitectura (alto nivel)
@@ -53,7 +51,7 @@ Esta PRD define un plan **por etapas** para evitar sobrediseño y llegar a un si
 ```mermaid
 flowchart TD
   prdInput[TaskSource(PRD/YAML)] --> validate[ValidateMetadataAndDAG]
-  validate --> plan[PlanSchedule(readyQueue,mutex)]
+  validate --> plan[PlanSchedule(readyQueue)]
   plan --> runWorkers[RunWorkersInParallel]
   runWorkers --> gates[PerTaskGates(commits,allowedPaths,tests)]
   gates --> integrate[IntegrationBranchMerge]
@@ -77,7 +75,6 @@ tasks:
     title: Add user table migration
     completed: false
     dependsOn: []
-    mutex: ["db-migrations"]
     touches: ["db/migrations/**", "src/db/**"]
     contracts:
       produces: ["contract:db-schema"]
@@ -90,7 +87,6 @@ tasks:
     title: Add auth middleware
     completed: false
     dependsOn: ["US-001"]
-    mutex: ["contract:auth-api"]
     touches: ["src/auth/**", "src/middleware/**"]
     contracts:
       produces: ["contract:auth-api"]
@@ -117,7 +113,7 @@ Cada etapa incluye:
 
 ### Etapa 1 (MVP): Metadata + DAG Validation + Scheduler básico (sin contracts enforcement)
 
-**Objetivo**: construir el DAG de tareas y planificar paralelismo respetando `dependsOn` y `mutex`, sin cambiar demasiado el comportamiento de ejecución.
+**Objetivo**: construir el DAG de tareas y planificar paralelismo respetando `dependsOn`, sin cambiar demasiado el comportamiento de ejecución.
 
 **Alcance**:
 - Introducir `tasks.yaml` v1 (solo YAML, no PRD.md).
@@ -125,24 +121,21 @@ Cada etapa incluye:
   - ids únicos
   - `dependsOn` válido
   - sin ciclos
-  - `mutex` perteneciente a un catálogo conocido
 - Scheduler central:
   - `readyQueue` por dependencias
-  - exclusión por `mutex`
   - límite de concurrencia `--max-parallel`
 - Ejecución en worktrees (como hoy) y reporte de estado básico.
 
 **Criterios de aceptación**:
 - [ ] Con un `tasks.yaml` con dependencias, solo se ejecutan en paralelo tareas sin `dependsOn` pendientes.
-- [ ] Si dos tareas comparten `mutex`, nunca corren simultáneamente.
 - [ ] El sistema rechaza DAGs con ciclos y muestra un error claro.
 
 **Checklist (Etapa 1)**:
 - [ ] Definir `tasks.yaml` v1 schema (documentado).
-- [ ] Añadir parser YAML y validación (ids, cycles, dependsOn, mutex catálogo).
-- [ ] Implementar scheduler: ready/running/done/failed + mutex locks.
+- [ ] Añadir parser YAML y validación (ids, cycles, dependsOn).
+- [ ] Implementar scheduler: ready/running/done/failed.
 - [ ] Integrar scheduler con el runner paralelo existente (`run_parallel_tasks`).
-- [ ] Logging: estado por tarea (started/done/failed) y por qué se bloquea (dep/mutex).
+- [ ] Logging: estado por tarea (started/done/failed) y por qué se bloquea (dep).
 
 ---
 
@@ -217,13 +210,12 @@ Cada etapa incluye:
 
 **Criterios de aceptación**:
 - [ ] Si una tarea consume un contrato, no se ejecuta hasta que exista la tarea productora (o contrato base).
-- [ ] Cambios a contratos pueden requerir mutex `contract:X` para evitar carreras.
+- [ ] Cambios a contratos pueden requerir coordinación adicional para evitar carreras.
 
 **Checklist (Etapa 4)**:
 - [ ] Especificar catálogo de contratos (nombres).
 - [ ] Añadir validación: consumes debe existir (o estar en baseline).
 - [ ] Inferir edges: producer → consumer (si no está en dependsOn, warning o auto-add).
-- [ ] Añadir mutex recomendado por contrato (`contract:X`) en tareas productoras.
 
 ---
 
@@ -260,23 +252,23 @@ Cada etapa incluye:
   - validate → schedule → runWorkers → perTaskGates → integrationMerge → globalGates → reviewer → fixLoop → finalize
 - Cambios al worker prompt:
   - exigir `task-report` + commits
-  - respetar `allowedToModify`/touches/mutex/contracts
+  - respetar `allowedToModify`/touches/contracts
 
 ## 10. Skills nuevas (propuesta)
 
 Estas skills son “instructions bundles” para mejorar consistencia entre motores (Claude/Codex/OpenCode/Cursor):
 
-- `task-metadata`: generar/validar metadata de tareas (ids, dependsOn, mutex, touches, contracts, mergeNotes).
+- `task-metadata`: generar/validar metadata de tareas (ids, dependsOn, touches, contracts, mergeNotes).
 - `dag-planner`: construir/validar DAG, calcular paralelismo seguro, explicar bloqueos.
-- `parallel-safe-implementation`: guías para que un worker respete límites (no tocar hotspots sin mutex, no refactors masivos, etc.).
+- `parallel-safe-implementation`: guías para que un worker respete límites (no tocar hotspots fuera de touches, no refactors masivos, etc.).
 - `merge-integrator`: merge automático + resolución con mergeNotes/contracts + gates.
 - `semantic-reviewer`: generar review-report estructurado y accionable; identificar conflictos semánticos/diseño.
 
 ## 11. Riesgos & mitigaciones
 
-- **Metadata incorrecta**: mitigación con validación + warnings + aprendizaje (catálogo de mutex/contracts).
-- **Flakiness por recursos externos**: añadir `requiresEnv` + mutex específicos (ej. `local-db`) o ejecutar tests aislados.
-- **Overhead de coordinación**: empezar con pocos mutex/contracts; instrumentar métricas de contención.
+- **Metadata incorrecta**: mitigación con validación + warnings + aprendizaje (catálogo de contracts).
+- **Flakiness por recursos externos**: añadir `requiresEnv` específicos (ej. `local-db`) o ejecutar tests aislados.
+- **Overhead de coordinación**: empezar con pocos contracts; instrumentar métricas de contención.
 - **Loops reviewer→fix infinito**: límite de iteraciones y severidad mínima para auto-fix.
 
 ## 12. Métricas de éxito
@@ -285,5 +277,4 @@ Estas skills son “instructions bundles” para mejorar consistencia entre moto
 - Cantidad de conflictos `git` (antes/después).
 - Cantidad de fallos post-merge (tests rotos).
 - Cantidad de issues semánticos detectados por reviewer y su tasa de reparación.
-- Contención por mutex (tiempo esperando locks).
-
+- Contención por dependencias (tiempo esperando en readyQueue).
