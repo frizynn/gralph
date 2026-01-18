@@ -7,6 +7,35 @@ Each completed task should add an entry here for future reference.
 
 <!-- Ralph will append progress entries here automatically -->
 
+## US-005 Implementation (2024-01-18)
+
+**Task**: Build Contact / Booking Flow with Calendly link, email, and form
+
+**Files Created**:
+- `index.html` - Complete landing page with all sections (US-001 to US-006)
+- `styles.css` - Comprehensive CSS styling with responsive design
+- `script.js` - JavaScript for form validation and interactions
+
+**Contact / Booking Flow Implementation**:
+- Primary CTA button scrolls to contact section
+- Calendly link with configurable URL (opens in new tab)
+- Email link with mailto and prefilled subject
+- Contact form with client-side validation:
+  - Name validation (min 2 characters)
+  - Email validation (valid email format)
+  - Project summary validation (min 10 characters)
+  - Real-time validation on blur
+  - Clear errors when user starts typing
+- Form submission stub with confirmation message
+- Accessible form with ARIA attributes and error messages
+- Responsive design for all screen sizes
+
+**Verification**:
+- JavaScript syntax validated with node --check
+- HTML structure verified
+- CSS structure verified
+- No linting tools available in environment
+
 ## Patterns Discovered
 
 - Always check for existing patterns in AGENTS.md before implementing new features
