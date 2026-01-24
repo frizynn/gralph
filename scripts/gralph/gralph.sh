@@ -44,9 +44,6 @@ PRD_ID=""
 PRD_RUN_DIR=""
 RESUME_PRD_ID=""
 
-# Skills init options
-SKILLS_INIT=false
-SKILLS_BASE_URL="${GRALPH_SKILLS_BASE_URL:-${RALPH_SKILLS_BASE_URL:-https://raw.githubusercontent.com/frizynn/central-ralph/main/skills}}"
 
 # Colors (detect if terminal supports colors)
 if [[ -t 1 ]] && command -v tput &>/dev/null && [[ $(tput colors 2>/dev/null || echo 0) -ge 8 ]]; then
@@ -111,6 +108,14 @@ log_debug() {
   if [[ "$VERBOSE" == true ]]; then
     echo "${DIM}[DEBUG] $*${RESET}"
   fi
+}
+
+stage_banner() {
+  local name=$1
+  echo ""
+  echo "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+  echo "${BOLD}${name}${RESET}"
+  echo "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 }
 
 # Slugify text for branch names
@@ -265,184 +270,6 @@ external_fail_graceful_stop() {
   fi
 }
 
-# Return candidate skill files to check for existence
-get_skill_file_candidates() {
-  local engine=$1
-  local skill=$2
-  local repo_root
-  repo_root=$(resolve_repo_root)
-
-  case "$engine" in
-    claude)
-      echo "$repo_root/.claude/skills/$skill/SKILL.md"
-      echo "$HOME/.claude/skills/$skill/SKILL.md"
-      ;;
-    codex)
-      echo "$repo_root/.codex/skills/$skill/SKILL.md"
-      echo "$HOME/.codex/skills/$skill/SKILL.md"
-      ;;
-    opencode)
-      echo "$repo_root/.opencode/skill/$skill/SKILL.md"
-      echo "$HOME/.config/opencode/skill/$skill/SKILL.md"
-      ;;
-    cursor)
-      echo "$repo_root/.cursor/rules/${skill}.mdc"
-      echo "$repo_root/.cursor/commands/${skill}.md"
-      ;;
-  esac
-}
-
-# Pick install target (prefer project path, fallback to user path)
-get_skill_install_target() {
-  local engine=$1
-  local skill=$2
-  local repo_root
-  repo_root=$(resolve_repo_root)
-
-  local project_target=""
-  local user_target=""
-
-  case "$engine" in
-    claude)
-      project_target="$repo_root/.claude/skills/$skill/SKILL.md"
-      user_target="$HOME/.claude/skills/$skill/SKILL.md"
-      ;;
-    codex)
-      project_target="$repo_root/.codex/skills/$skill/SKILL.md"
-      user_target="$HOME/.codex/skills/$skill/SKILL.md"
-      ;;
-    opencode)
-      project_target="$repo_root/.opencode/skill/$skill/SKILL.md"
-      user_target="$HOME/.config/opencode/skill/$skill/SKILL.md"
-      ;;
-    cursor)
-      project_target="$repo_root/.cursor/rules/${skill}.mdc"
-      ;;
-  esac
-
-  if [[ -n "$project_target" ]] && ensure_parent_dir_writable "$project_target"; then
-    echo "$project_target"
-    return 0
-  fi
-
-  if [[ -n "$user_target" ]] && ensure_parent_dir_writable "$user_target"; then
-    echo "$user_target"
-    return 0
-  fi
-
-  echo ""
-  return 1
-}
-
-skill_exists() {
-  local engine=$1
-  local skill=$2
-
-  while IFS= read -r candidate; do
-    [[ -f "$candidate" ]] && return 0
-  done < <(get_skill_file_candidates "$engine" "$skill")
-
-  return 1
-}
-
-download_skill_content() {
-  local skill=$1
-  local base_url="${SKILLS_BASE_URL%/}"
-  local url="${base_url}/${skill}/SKILL.md"
-  local tmpfile
-  tmpfile=$(mktemp)
-  local repo_root
-  repo_root=$(resolve_repo_root)
-  local local_skill_path="${repo_root}/skills/${skill}/SKILL.md"
-
-  if command -v curl &>/dev/null; then
-    if ! curl -fsSL "$url" -o "$tmpfile"; then
-      if [[ -f "$local_skill_path" ]]; then
-        cp "$local_skill_path" "$tmpfile"
-        log_warn "Falling back to local skill source for '$skill'" >&2
-        echo "$tmpfile"
-        return 0
-      fi
-      return 1
-    fi
-  elif command -v wget &>/dev/null; then
-    if ! wget -qO "$tmpfile" "$url"; then
-      if [[ -f "$local_skill_path" ]]; then
-        cp "$local_skill_path" "$tmpfile"
-        log_warn "Falling back to local skill source for '$skill'" >&2
-        echo "$tmpfile"
-        return 0
-      fi
-      return 1
-    fi
-  else
-    log_error "Missing downloader: install curl or wget"
-    return 1
-  fi
-
-  echo "$tmpfile"
-}
-
-install_skill_if_missing() {
-  local engine=$1
-  local skill=$2
-
-  if skill_exists "$engine" "$skill"; then
-    log_info "Skill '$skill' already installed for $engine, skipping"
-    return 0
-  fi
-
-  local target
-  target=$(get_skill_install_target "$engine" "$skill")
-  if [[ -z "$target" ]]; then
-    log_warn "No writable install path for $engine skill '$skill'"
-    return 1
-  fi
-
-  local tmpfile
-  if ! tmpfile=$(download_skill_content "$skill"); then
-    log_error "Failed to download skill '$skill' from ${SKILLS_BASE_URL}"
-    return 1
-  fi
-
-  if mv "$tmpfile" "$target"; then
-    log_success "Installed '$skill' for $engine at $target"
-    return 0
-  fi
-
-  log_error "Failed to install '$skill' for $engine at $target"
-  return 1
-}
-
-ensure_skills_for_engine() {
-  local engine=$1
-  local mode=$2
-  local skills=("prd" "ralph" "task-metadata" "dag-planner" "parallel-safe-implementation" "merge-integrator" "semantic-reviewer")
-  local missing=false
-
-  if [[ "$engine" == "cursor" ]]; then
-    log_warn "Cursor skills are not officially supported; installing as rules is best-effort."
-  fi
-
-  for skill in "${skills[@]}"; do
-    if skill_exists "$engine" "$skill"; then
-      log_info "Skill '$skill' found for $engine"
-      continue
-    fi
-
-    missing=true
-    if [[ "$mode" == "install" ]]; then
-      install_skill_if_missing "$engine" "$skill" || true
-    else
-      log_warn "Missing skill '$skill' for $engine (run --init to install)"
-    fi
-  done
-
-  if [[ "$mode" == "install" ]] && [[ "$missing" == false ]]; then
-    log_success "All skills already present for $engine"
-  fi
-}
-
 # ============================================
 # HELP & VERSION
 # ============================================
@@ -486,8 +313,6 @@ ${BOLD}PRD OPTIONS:${RESET}
   --resume PRD-ID     Resume a previous run by prd-id
 
 ${BOLD}OTHER OPTIONS:${RESET}
-  --init              Install missing skills for the current AI engine and exit
-  --skills-url URL    Override skills base URL (default: GitHub raw)
   -v, --verbose       Show debug output
   -h, --help          Show this help
   --version           Show version number
@@ -499,11 +324,12 @@ ${BOLD}EXAMPLES:${RESET}
   ./scripts/gralph/gralph.sh --resume my-feature    # Resume previous run
 
 ${BOLD}WORKFLOW:${RESET}
-  1. Create PRD.md with prd-id line (use /prd skill)
+  Prepare -> Execute -> Integrate
+  1. Create PRD.md with prd-id line
   2. Run gralph: ./scripts/gralph/gralph.sh --opencode
   3. GRALPH creates artifacts/prd/<prd-id>/ with tasks.yaml
-  4. Tasks run in parallel using DAG scheduler
-  5. Resume anytime with --resume <prd-id>
+  4. Tasks run in parallel using DAG scheduler + resource locks
+  5. Integration merges + semantic review
 
 ${BOLD}PRD FORMAT:${RESET}
   PRD.md must include a prd-id line:
@@ -565,14 +391,6 @@ parse_args() {
       --dry-run)
         DRY_RUN=true
         shift
-        ;;
-      --init)
-        SKILLS_INIT=true
-        shift
-        ;;
-      --skills-url)
-        SKILLS_BASE_URL="${2:-$SKILLS_BASE_URL}"
-        shift 2
         ;;
       --max-iterations)
         MAX_ITERATIONS="${2:-0}"
@@ -832,50 +650,8 @@ cleanup() {
 }
 
 # ============================================
-# TASK SOURCES - YAML
+# YAML V1 VALIDATION (DAG + LOCKS)
 # ============================================
-
-get_tasks_yaml() {
-  yq -r '.tasks[] | select(.completed != true) | .title' "$PRD_FILE" 2>/dev/null || true
-}
-
-get_next_task_yaml() {
-  yq -r '.tasks[] | select(.completed != true) | .title' "$PRD_FILE" 2>/dev/null | head -1 | cut -c1-50 || echo ""
-}
-
-count_remaining_yaml() {
-  yq -r '[.tasks[] | select(.completed != true)] | length' "$PRD_FILE" 2>/dev/null || echo "0"
-}
-
-count_completed_yaml() {
-  yq -r '[.tasks[] | select(.completed == true)] | length' "$PRD_FILE" 2>/dev/null || echo "0"
-}
-
-mark_task_complete_yaml() {
-  local task=$1
-  yq -i "(.tasks[] | select(.title == \"$task\")).completed = true" "$PRD_FILE"
-}
-
-# ============================================
-# YAML V1 VALIDATION (DAG + MUTEX)
-# ============================================
-
-# Check if tasks.yaml uses v1 format
-is_yaml_v1() {
-  local version
-  version=$(yq -r '.version // ""' "$PRD_FILE" 2>/dev/null)
-  if [[ "$version" == "1" ]]; then
-    return 0
-  fi
-  if [[ -n "$version" && "$version" != "1" ]]; then
-    return 1
-  fi
-
-  # No version set: infer v1 if tasks contain ids
-  local has_id
-  has_id=$(yq -r '.tasks[]?.id // empty' "$PRD_FILE" 2>/dev/null | head -1)
-  [[ -n "$has_id" ]]
-}
 
 # Get task ID by index
 get_task_id_yaml_v1() {
@@ -905,10 +681,79 @@ get_task_deps_by_id_yaml_v1() {
   yq -r ".tasks[] | select(.id == \"$id\") | .dependsOn[]?" "$PRD_FILE" 2>/dev/null
 }
 
-# Get task mutex by ID
-get_task_mutex_by_id_yaml_v1() {
+# Get task touches by ID
+get_task_touches_by_id_yaml_v1() {
   local id=$1
+  yq -r ".tasks[] | select(.id == \"$id\") | .touches[]?" "$PRD_FILE" 2>/dev/null
+}
+
+# Get explicit locks by ID (supports legacy mutex field)
+get_task_locks_by_id_yaml_v1() {
+  local id=$1
+  yq -r ".tasks[] | select(.id == \"$id\") | .locks[]?" "$PRD_FILE" 2>/dev/null
   yq -r ".tasks[] | select(.id == \"$id\") | .mutex[]?" "$PRD_FILE" 2>/dev/null
+}
+
+# Infer locks from touches (conservative to preserve safety)
+infer_locks_from_touches() {
+  local id=$1
+  declare -A seen=()
+  while IFS= read -r touch; do
+    [[ -z "$touch" ]] && continue
+    local lock=""
+
+    case "$touch" in
+      *package.json|*package-lock.json|*pnpm-lock.yaml|*yarn.lock)
+        lock="lockfile"
+        ;;
+      *db/migrations/*|*db/migrations/**|*migrations/*)
+        lock="db-migrations"
+        ;;
+      *prisma/*|*schema.prisma)
+        lock="db-schema"
+        ;;
+      *router/*|*routes/*)
+        lock="router"
+        ;;
+      *config/*|*.env*|*settings/*)
+        lock="global-config"
+        ;;
+      *)
+        local base="${touch%%/*}"
+        if [[ -z "$base" || "$base" == "$touch" || "$base" == "." || "$base" == "*" || "$base" == "**" ]]; then
+          lock="root"
+        else
+          lock="$base"
+        fi
+        ;;
+    esac
+
+    if [[ -n "$lock" && -z "${seen[$lock]:-}" ]]; then
+      seen[$lock]=1
+      echo "$lock"
+    fi
+  done < <(get_task_touches_by_id_yaml_v1 "$id")
+}
+
+# Get effective locks (explicit + inferred)
+get_task_effective_locks_yaml_v1() {
+  local id=$1
+  declare -A seen=()
+  while IFS= read -r lock; do
+    [[ -z "$lock" ]] && continue
+    if [[ -z "${seen[$lock]:-}" ]]; then
+      seen[$lock]=1
+      echo "$lock"
+    fi
+  done < <(get_task_locks_by_id_yaml_v1 "$id")
+
+  while IFS= read -r lock; do
+    [[ -z "$lock" ]] && continue
+    if [[ -z "${seen[$lock]:-}" ]]; then
+      seen[$lock]=1
+      echo "$lock"
+    fi
+  done < <(infer_locks_from_touches "$id")
 }
 
 # Check if task is completed
@@ -925,37 +770,6 @@ mark_task_complete_by_id_yaml_v1() {
   yq -i "(.tasks[] | select(.id == \"$id\")).completed = true" "$PRD_FILE"
 }
 
-# Load mutex catalog
-load_mutex_catalog() {
-  local catalog_file="${ORIGINAL_DIR:-$(pwd)}/mutex-catalog.json"
-  if [[ ! -f "$catalog_file" ]]; then
-    # Return empty if no catalog (allow any mutex)
-    echo ""
-    return
-  fi
-  # Return list of valid mutex names
-  jq -r '.mutex | keys[]' "$catalog_file" 2>/dev/null
-}
-
-# Check if mutex is valid (in catalog or matches contract:* pattern)
-is_valid_mutex() {
-  local mutex=$1
-  local catalog=$2
-  
-  # contract:* pattern is always valid
-  if [[ "$mutex" == contract:* ]]; then
-    return 0
-  fi
-  
-  # Check against catalog
-  if [[ -z "$catalog" ]]; then
-    # No catalog = allow all
-    return 0
-  fi
-  
-  echo "$catalog" | grep -qx "$mutex"
-}
-
 # Validate tasks.yaml v1 schema
 validate_tasks_yaml_v1() {
   local errors=()
@@ -966,10 +780,6 @@ validate_tasks_yaml_v1() {
   if [[ -n "$version" && "$version" != "1" ]]; then
     errors+=("version must be 1 if specified (got: $version)")
   fi
-  
-  # Load mutex catalog
-  local mutex_catalog
-  mutex_catalog=$(load_mutex_catalog)
   
   # Get all task IDs for dependency checking
   local all_ids=()
@@ -1014,13 +824,6 @@ validate_tasks_yaml_v1() {
       fi
     done < <(yq -r ".tasks[$i].dependsOn[]?" "$PRD_FILE" 2>/dev/null)
     
-    # Validate mutex
-    while IFS= read -r mutex; do
-      [[ -z "$mutex" ]] && continue
-      if ! is_valid_mutex "$mutex" "$mutex_catalog"; then
-        errors+=("Task $id: unknown mutex '$mutex'")
-      fi
-    done < <(yq -r ".tasks[$i].mutex[]?" "$PRD_FILE" 2>/dev/null)
   done
   
   # Check for cycles
@@ -1116,12 +919,12 @@ detect_cycles_yaml_v1() {
 
 # Global scheduler state (arrays for bash 3.x compat, but we use bash 4+ features)
 declare -A SCHED_STATE      # task_id -> pending|running|done|failed
-declare -A SCHED_LOCKED     # mutex -> task_id (who holds it)
+declare -A SCHED_RESOURCES  # lock -> task_id (who holds it)
 
 # Initialize scheduler state
 scheduler_init_yaml_v1() {
   SCHED_STATE=()
-  SCHED_LOCKED=()
+  SCHED_RESOURCES=()
   
   while IFS= read -r id; do
     [[ -z "$id" ]] && continue
@@ -1146,43 +949,43 @@ scheduler_deps_satisfied() {
   return 0
 }
 
-# Check if task can acquire its mutex
-scheduler_mutex_available() {
+# Check if task can acquire its resources
+scheduler_resources_available() {
   local id=$1
-  while IFS= read -r mutex; do
-    [[ -z "$mutex" ]] && continue
+  while IFS= read -r lock; do
+    [[ -z "$lock" ]] && continue
     # Use :- to provide default empty value (fixes set -u unbound variable)
-    if [[ -n "${SCHED_LOCKED[$mutex]:-}" ]]; then
+    if [[ -n "${SCHED_RESOURCES[$lock]:-}" ]]; then
       return 1
     fi
-  done < <(get_task_mutex_by_id_yaml_v1 "$id")
+  done < <(get_task_effective_locks_yaml_v1 "$id")
   return 0
 }
 
-# Lock mutex for a task
-scheduler_lock_mutex() {
+# Lock resources for a task
+scheduler_lock_resources() {
   local id=$1
-  while IFS= read -r mutex; do
-    [[ -z "$mutex" ]] && continue
-    SCHED_LOCKED[$mutex]=$id
-  done < <(get_task_mutex_by_id_yaml_v1 "$id")
+  while IFS= read -r lock; do
+    [[ -z "$lock" ]] && continue
+    SCHED_RESOURCES[$lock]=$id
+  done < <(get_task_effective_locks_yaml_v1 "$id")
 }
 
-# Unlock mutex for a task
-scheduler_unlock_mutex() {
+# Unlock resources for a task
+scheduler_unlock_resources() {
   local id=$1
-  while IFS= read -r mutex; do
-    [[ -z "$mutex" ]] && continue
-    unset "SCHED_LOCKED[$mutex]"
-  done < <(get_task_mutex_by_id_yaml_v1 "$id")
+  while IFS= read -r lock; do
+    [[ -z "$lock" ]] && continue
+    unset "SCHED_RESOURCES[$lock]"
+  done < <(get_task_effective_locks_yaml_v1 "$id")
 }
 
-# Get ready tasks (deps satisfied and mutex available)
+# Get ready tasks (deps satisfied and resources available)
 scheduler_get_ready() {
   local ready=()
   for id in "${!SCHED_STATE[@]}"; do
     if [[ "${SCHED_STATE[$id]}" == "pending" ]]; then
-      if scheduler_deps_satisfied "$id" && scheduler_mutex_available "$id"; then
+      if scheduler_deps_satisfied "$id" && scheduler_resources_available "$id"; then
         ready+=("$id")
       fi
     fi
@@ -1212,25 +1015,25 @@ scheduler_count_pending() {
 scheduler_start_task() {
   local id=$1
   SCHED_STATE[$id]="running"
-  scheduler_lock_mutex "$id"
-  log_debug "Task $id: pending → running (mutex locked)"
+  scheduler_lock_resources "$id"
+  log_debug "Task $id: pending → running (resources locked)"
 }
 
 # Mark task as done
 scheduler_complete_task() {
   local id=$1
   SCHED_STATE[$id]="done"
-  scheduler_unlock_mutex "$id"
+  scheduler_unlock_resources "$id"
   mark_task_complete_by_id_yaml_v1 "$id"
-  log_debug "Task $id: running → done (mutex released)"
+  log_debug "Task $id: running → done (resources released)"
 }
 
 # Mark task as failed
 scheduler_fail_task() {
   local id=$1
   SCHED_STATE[$id]="failed"
-  scheduler_unlock_mutex "$id"
-  log_debug "Task $id: running → failed (mutex released)"
+  scheduler_unlock_resources "$id"
+  log_debug "Task $id: running → failed (resources released)"
 }
 
 # Explain why a task is blocked
@@ -1251,18 +1054,18 @@ scheduler_explain_block() {
     reasons+=("dependsOn: ${blocked_deps[*]}")
   fi
   
-  # Check mutex
-  local blocked_mutex=()
-  while IFS= read -r mutex; do
-    [[ -z "$mutex" ]] && continue
+  # Check resources
+  local blocked_locks=()
+  while IFS= read -r lock; do
+    [[ -z "$lock" ]] && continue
     # Use :- to provide default empty value (fixes set -u unbound variable)
-    if [[ -n "${SCHED_LOCKED[$mutex]:-}" ]]; then
-      blocked_mutex+=("$mutex (held by ${SCHED_LOCKED[$mutex]:-})")
+    if [[ -n "${SCHED_RESOURCES[$lock]:-}" ]]; then
+      blocked_locks+=("$lock (held by ${SCHED_RESOURCES[$lock]:-})")
     fi
-  done < <(get_task_mutex_by_id_yaml_v1 "$id")
+  done < <(get_task_effective_locks_yaml_v1 "$id")
   
-  if [[ ${#blocked_mutex[@]} -gt 0 ]]; then
-    reasons+=("mutex: ${blocked_mutex[*]}")
+  if [[ ${#blocked_locks[@]} -gt 0 ]]; then
+    reasons+=("resources locked: ${blocked_locks[*]}")
   fi
   
   if [[ ${#reasons[@]} -gt 0 ]]; then
@@ -1286,7 +1089,7 @@ scheduler_check_deadlock() {
 }
 
 # ============================================
-# PIPELINE AGENTS (PRD → TASKS → RUN → REVIEW)
+# PIPELINE: Prepare -> Execute -> Integrate
 # ============================================
 
 # Artifacts directory for this run
@@ -1315,7 +1118,7 @@ find_prd_file() {
 }
 
 # ============================================
-# STAGE 0: PRD → tasks.yaml (Metadata Agent)
+# PREPARE: PRD -> tasks.yaml (Metadata Agent)
 # ============================================
 
 run_metadata_agent() {
@@ -1326,35 +1129,40 @@ run_metadata_agent() {
   
   log_info "Generating $output_file from $prd_file..."
   
-  local prompt="Read the PRD file and convert it to tasks.yaml format.
+  local prompt
+  prompt=$(cat << EOF
+You are generating task metadata. Read the PRD and output ONLY a tasks.yaml file.
 
 @$prd_file
 
-Create a tasks.yaml file with this EXACT format:
-
+Format (YAML v1):
+version: 1
 branchName: gralph/your-feature-name
 tasks:
   - id: TASK-001
-    title: \"First task description\"
+    title: "Short task description"
     completed: false
     dependsOn: []
-    mutex: []
-  - id: TASK-002
-    title: \"Second task description\"  
-    completed: false
-    dependsOn: [\"TASK-001\"]
-    mutex: []
+    touches: ["src/path/**"]
+    locks: ["lockfile"]        # optional (explicit override)
+    mergeNotes: ""             # optional
+    verify: []                 # optional
 
 Rules:
 1. Each task gets a unique ID (TASK-001, TASK-002, etc.)
 2. Order tasks by dependency (database first, then backend, then frontend)
 3. Use dependsOn to link tasks that must run after others
-4. Use mutex for shared resources: db-migrations, lockfile, router, global-config
-5. Set branchName to a short kebab-case feature name prefixed with \"gralph/\" (based on the PRD)
-6. Keep tasks small and focused (completable in one session)
+4. Include touches for every task (paths/globs it will modify). Be conservative.
+5. Locks are inferred from touches. Only add explicit locks when PRD mentions an exclusive/shared hotspot.
+6. Avoid legacy "mutex" unless the PRD explicitly references it.
+7. Set branchName to a short kebab-case feature name prefixed with "gralph/" (based on the PRD)
+8. Keep tasks small and focused (completable in one session)
+9. Ensure dependsOn references exist and avoid cycles.
 
 Save the file as $output_file.
-Do NOT implement anything - only create the tasks.yaml file."
+Do NOT implement anything - only create the tasks.yaml file.
+EOF
+)
 
   local tmpfile
   tmpfile=$(mktemp)
@@ -1373,7 +1181,7 @@ Do NOT implement anything - only create the tasks.yaml file."
 }
 
 # ============================================
-# STAGE 2: Task Reports
+# EXECUTE: Task Reports
 # ============================================
 
 # Get task mergeNotes by ID
@@ -1415,7 +1223,7 @@ EOF
 }
 
 # ============================================
-# STAGE 3: Integration Branch + Merge Agent
+# INTEGRATE: Integration Branch + Merge Agent
 # ============================================
 
 INTEGRATION_BRANCH=""
@@ -1444,21 +1252,27 @@ merge_branch_with_fallback() {
   local merge_notes
   merge_notes=$(get_task_merge_notes_yaml_v1 "$task_id")
   
-  local prompt="Resolve git merge conflicts in these files:
+  local prompt
+  prompt=$(cat << EOF
+You are resolving git merge conflicts for an integration merge.
 
+Conflicted files:
 $conflicted_files
 
 Merge notes from task: $merge_notes
 
-For each file:
-1. Read the conflict markers (<<<<<<< HEAD, =======, >>>>>>>)
-2. Combine BOTH changes intelligently
-3. Remove all conflict markers
-4. Ensure valid syntax
+Rules:
+1. Read the conflict markers (<<<<<<< HEAD, =======, >>>>>>>).
+2. Combine BOTH changes intelligently (prefer additive merges over choosing one side).
+3. Keep all necessary imports/exports and remove duplicates.
+4. Remove all conflict markers and ensure valid syntax.
+5. Do not change unrelated files.
 
 Then run:
 git add <files>
-git commit --no-edit"
+git commit --no-edit
+EOF
+)
 
   local tmpfile
   tmpfile=$(mktemp)
@@ -1479,7 +1293,7 @@ git commit --no-edit"
 }
 
 # ============================================
-# STAGE 5: Semantic Reviewer
+# INTEGRATE: Semantic Reviewer
 # ============================================
 
 run_reviewer_agent() {
@@ -1496,7 +1310,9 @@ run_reviewer_agent() {
     [[ -f "$report" ]] && reports_summary="$reports_summary\n$(cat "$report")"
   done
   
-  local prompt="Review the integrated code changes for issues.
+  local prompt
+  prompt=$(cat << EOF
+Review the integrated code changes for semantic issues, design inconsistencies, and potential bugs.
 
 Diff summary:
 $diff_summary
@@ -1504,22 +1320,50 @@ $diff_summary
 Task reports:
 $reports_summary
 
-Check for:
-1. Type mismatches between modules
-2. Broken imports or references
-3. Inconsistent patterns (error handling, naming)
-4. Missing exports
+Scope (what to check):
+- API consistency across tasks
+- Type/interface compatibility
+- Broken imports/exports or references
+- Inconsistent error handling patterns
+- Dead code from partial changes
 
-Create a file review-report.json with this format:
+Do NOT focus on formatting or style-only issues.
+
+Severity levels:
+- blocker: breaks compilation/runtime, must fix before merge
+- critical: logic error or data risk, should fix before merge
+- warning: inconsistency or tech debt
+- info: optional suggestion
+
+Output a JSON file at: $ARTIFACTS_DIR/review-report.json
+
+Format:
 {
-  \"issues\": [
-    {\"severity\": \"blocker|critical|warning\", \"file\": \"path\", \"description\": \"...\", \"suggestedFix\": \"...\"}
+  "version": 1,
+  "reviewedCommits": ["abc123", "def456"],
+  "summary": {"blockers": 0, "critical": 0, "warnings": 0, "info": 0},
+  "issues": [
+    {
+      "id": "ISSUE-001",
+      "severity": "blocker|critical|warning|info",
+      "title": "Short issue title",
+      "file": "path",
+      "line": 42,
+      "description": "What is wrong",
+      "evidence": "Why this is a problem",
+      "suggestedFix": "How to fix",
+      "relatedTasks": ["TASK-001"]
+    }
   ],
-  \"summary\": \"Brief overall assessment\"
+  "designConflicts": [
+    {"pattern": "Error handling", "description": "Mismatch", "recommendation": "Unify pattern"}
+  ],
+  "followUps": ["Optional improvements"]
 }
 
-If no issues found, create an empty issues array.
-Save to $ARTIFACTS_DIR/review-report.json"
+If no issues found, set issues to an empty array and all counts to 0.
+EOF
+)
 
   local tmpfile
   tmpfile=$(mktemp)
@@ -1566,7 +1410,7 @@ generate_fix_tasks() {
       \"title\": \"Fix: $desc\",
       \"completed\": false,
       \"dependsOn\": [],
-      \"mutex\": []
+      \"touches\": []
     }]" "$PRD_FILE"
     
     fix_num=$((fix_num + 1))
@@ -2110,198 +1954,6 @@ cleanup_agent_worktree() {
   # Don't delete branch - it may have commits we want to keep/PR
 }
 
-# Run a single agent in its own isolated worktree
-run_parallel_agent() {
-  local task_name="$1"
-  local agent_num="$2"
-  local output_file="$3"
-  local status_file="$4"
-  local log_file="$5"
-  local stream_file="${6:-}"  # Optional: file for streaming output to display progress
-  
-  echo "setting up" > "$status_file"
-  
-  # Log setup info
-  echo "Agent $agent_num starting for task: $task_name" >> "$log_file"
-  echo "ORIGINAL_DIR=$ORIGINAL_DIR" >> "$log_file"
-  echo "WORKTREE_BASE=$WORKTREE_BASE" >> "$log_file"
-  echo "BASE_BRANCH=$BASE_BRANCH" >> "$log_file"
-  
-  # Create isolated worktree for this agent
-  local worktree_info
-  worktree_info=$(create_agent_worktree "$task_name" "$agent_num" 2>>"$log_file")
-  local worktree_dir="${worktree_info%%|*}"
-  local branch_name="${worktree_info##*|}"
-  
-  echo "Worktree dir: $worktree_dir" >> "$log_file"
-  echo "Branch name: $branch_name" >> "$log_file"
-  
-  if [[ ! -d "$worktree_dir" ]]; then
-    echo "failed" > "$status_file"
-    echo "ERROR: Worktree directory does not exist: $worktree_dir" >> "$log_file"
-    echo "0 0" > "$output_file"
-    return 1
-  fi
-  
-  echo "running" > "$status_file"
-  
-  # Copy tasks.yaml to worktree from original directory
-  cp "$ORIGINAL_DIR/$PRD_FILE" "$worktree_dir/" 2>/dev/null || true
-  
-  # Ensure progress.txt exists in worktree
-  touch "$worktree_dir/scripts/gralph/progress.txt"
-  
-  # Build prompt for this specific task
-  local prompt_base=""
-  local prompt_file="$ORIGINAL_DIR/scripts/gralph/prompt.md"
-  if [[ -f "$prompt_file" ]]; then
-    prompt_base=$(cat "$prompt_file")
-  fi
-
-  local prompt="${prompt_base}
-
-You are working on a specific task. Focus ONLY on this task:
-
-TASK: $task_name
-
-Instructions:
-1. Implement this specific task completely
-2. Write tests if appropriate
-3. Update scripts/gralph/progress.txt with what you did
-4. Commit your changes with a descriptive message
-
-Do NOT modify PRD.md or tasks.yaml - that will be handled separately.
-Focus only on implementing: $task_name"
-
-  # Temp file for AI output
-  local tmpfile
-  tmpfile=$(mktemp)
-  
-  # Run AI agent in the worktree directory
-  local result=""
-  local success=false
-  local retry=0
-  
-  while [[ $retry -lt $MAX_RETRIES ]]; do
-    # Clear stream file on each retry
-    [[ -n "$stream_file" ]] && : > "$stream_file"
-    
-    # Build options for execute_ai_prompt
-    local ai_opts="wd=$worktree_dir log=$log_file"
-    [[ -n "$stream_file" ]] && ai_opts="$ai_opts tee=$stream_file"
-    
-    execute_ai_prompt "$prompt" "$tmpfile" "$ai_opts"
-    
-    result=$(cat "$tmpfile" 2>/dev/null || echo "")
-    
-    if [[ -n "$result" ]]; then
-      local error_msg
-      if ! error_msg=$(check_for_errors "$result"); then
-        ((++retry))
-        echo "API error: $error_msg (attempt $retry/$MAX_RETRIES)" >> "$log_file"
-        sleep "$RETRY_DELAY"
-        continue
-      fi
-      success=true
-      break
-    fi
-    
-    ((++retry))
-    echo "Retry $retry/$MAX_RETRIES after empty response" >> "$log_file"
-    sleep "$RETRY_DELAY"
-  done
-  
-  rm -f "$tmpfile"
-  
-  if [[ "$success" == true ]]; then
-    # Parse tokens
-    local parsed input_tokens output_tokens
-    local CODEX_LAST_MESSAGE_FILE="${tmpfile}.last"
-    parsed=$(parse_ai_result "$result")
-    local token_data
-    token_data=$(echo "$parsed" | sed -n '/^---TOKENS---$/,$p' | tail -3)
-    input_tokens=$(echo "$token_data" | sed -n '1p')
-    output_tokens=$(echo "$token_data" | sed -n '2p')
-    [[ "$input_tokens" =~ ^[0-9]+$ ]] || input_tokens=0
-    [[ "$output_tokens" =~ ^[0-9]+$ ]] || output_tokens=0
-    rm -f "${tmpfile}.last"
-
-    # Ensure at least one commit exists before marking success
-    local commit_count
-    commit_count=$(git -C "$worktree_dir" rev-list --count "$BASE_BRANCH"..HEAD 2>/dev/null || echo "0")
-    [[ "$commit_count" =~ ^[0-9]+$ ]] || commit_count=0
-    if [[ "$commit_count" -eq 0 ]]; then
-      echo "ERROR: No new commits created; treating task as failed." >> "$log_file"
-      echo "failed" > "$status_file"
-      echo "0 0" > "$output_file"
-      cleanup_agent_worktree "$worktree_dir" "$branch_name" "$log_file"
-      return 1
-    fi
-    
-    # Create PR if requested
-    if [[ "$CREATE_PR" == true ]]; then
-      (
-        cd "$worktree_dir"
-        git push -u origin "$branch_name" 2>>"$log_file" || true
-        gh pr create \
-          --base "$BASE_BRANCH" \
-          --head "$branch_name" \
-          --title "$task_name" \
-          --body "Automated implementation by GRALPH (Agent $agent_num)" \
-          ${PR_DRAFT:+--draft} 2>>"$log_file" || true
-      )
-    fi
-    
-    # Save task report BEFORE cleanup (while worktree still exists)
-    if [[ -n "$ARTIFACTS_DIR" ]]; then
-      local changed_files
-      changed_files=$(git -C "$worktree_dir" diff --name-only "$BASE_BRANCH"..HEAD 2>/dev/null | tr '\n' ',' | sed 's/,$//')
-      
-# Read progress notes from worktree
-  local progress_notes=""
-  if [[ -f "$worktree_dir/scripts/gralph/progress.txt" ]]; then
-    progress_notes=$(cat "$worktree_dir/scripts/gralph/progress.txt" 2>/dev/null | tail -50)
-  fi
-  safe_notes=$(json_escape "$progress_notes")
-      
-      mkdir -p "$ORIGINAL_DIR/$ARTIFACTS_DIR/reports"
-      cat > "$ORIGINAL_DIR/$ARTIFACTS_DIR/reports/agent-${agent_num}-${task_id_slug}.json" << EOF
-{
-  "taskId": "agent-$agent_num",
-  "title": "$safe_title",
-  "branch": "$safe_branch",
-  "status": "done",
-  "commits": $commit_count,
-  "changedFiles": "$safe_changed",
-  "progressNotes": "$safe_notes",
-  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-EOF
-      
-# Append to main progress.txt
-    if [[ -f "$worktree_dir/progress.txt" ]] && [[ -s "$worktree_dir/progress.txt" ]]; then
-      echo "" >> "$ORIGINAL_DIR/scripts/gralph/progress.txt"
-      echo "### Agent $agent_num - $task_name ($(date +%Y-%m-%d))" >> "$ORIGINAL_DIR/scripts/gralph/progress.txt"
-      tail -20 "$worktree_dir/progress.txt" >> "$ORIGINAL_DIR/scripts/gralph/progress.txt"
-    fi
-    fi
-    
-    # Write success output
-    echo "done" > "$status_file"
-    echo "$input_tokens $output_tokens $branch_name" > "$output_file"
-    
-    # Cleanup worktree (but keep branch)
-    cleanup_agent_worktree "$worktree_dir" "$branch_name" "$log_file"
-    
-    return 0
-  else
-    echo "failed" > "$status_file"
-    echo "0 0" > "$output_file"
-    cleanup_agent_worktree "$worktree_dir" "$branch_name" "$log_file"
-    return 1
-  fi
-}
-
 # Run a single agent for YAML v1 task (by ID)
 run_parallel_agent_yaml_v1() {
   local task_id="$1"
@@ -2339,18 +1991,37 @@ run_parallel_agent_yaml_v1() {
   touch "$worktree_dir/scripts/gralph/progress.txt"
   
   # Build prompt for this task
-  local prompt="You are working on a specific task. Focus ONLY on this task:
+  local prompt_base=""
+  local prompt_file="$ORIGINAL_DIR/scripts/gralph/prompt.md"
+  if [[ -f "$prompt_file" ]]; then
+    prompt_base=$(cat "$prompt_file")
+  fi
+
+  local touches_list explicit_locks inferred_locks
+  touches_list=$(get_task_touches_by_id_yaml_v1 "$task_id" | tr '\n' ',' | sed 's/,$//')
+  explicit_locks=$(get_task_locks_by_id_yaml_v1 "$task_id" | tr '\n' ',' | sed 's/,$//')
+  inferred_locks=$(infer_locks_from_touches "$task_id" | tr '\n' ',' | sed 's/,$//')
+  [[ -z "$touches_list" ]] && touches_list="(none provided)"
+  [[ -z "$explicit_locks" ]] && explicit_locks="(none)"
+  [[ -z "$inferred_locks" ]] && inferred_locks="(none)"
+
+  local prompt="${prompt_base}
+
+You are working on a specific task. Focus ONLY on this task:
 
 TASK ID: $task_id
 TASK: $task_title
+DECLARED TOUCHES: $touches_list
+EXPLICIT LOCKS (locks/mutex): $explicit_locks
+INFERRED LOCKS (from touches): $inferred_locks
 
 Instructions:
 1. Implement this specific task completely
 2. Write tests if appropriate
-3. Update progress.txt with what you did
+3. Update scripts/gralph/progress.txt with what you did
 4. Commit your changes with a descriptive message
 
-Do NOT modify tasks.yaml or mark tasks complete - that will be handled separately.
+Do NOT modify PRD.md or tasks.yaml or mark tasks complete - that will be handled separately.
 Focus only on implementing: $task_title"
 
   local tmpfile
@@ -2446,6 +2117,7 @@ EOF
 
 # DAG-aware parallel execution for YAML v1
 run_parallel_tasks_yaml_v1() {
+  stage_banner "Execute"
   log_info "Running DAG-aware parallel execution (max $MAX_PARALLEL agents)..."
   
   ORIGINAL_DIR=$(pwd)
@@ -2753,10 +2425,7 @@ run_parallel_tasks_yaml_v1() {
   
   # Merge branches if not using PRs
   if [[ ${#completed_branches[@]} -gt 0 && "$CREATE_PR" != true ]]; then
-    echo ""
-    echo "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo "${BOLD}Integration Phase${RESET}"
-    echo "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    stage_banner "Integrate"
     
     # Create integration branch
     create_integration_branch
@@ -2780,8 +2449,6 @@ run_parallel_tasks_yaml_v1() {
     
     if [[ "$merge_success" == true ]]; then
       # Run reviewer
-      echo ""
-      echo "${BOLD}Review Phase${RESET}"
       if run_reviewer_agent; then
         # Merge integration to base
         echo ""
@@ -2880,11 +2547,6 @@ show_summary() {
 main() {
   parse_args "$@"
 
-  if [[ "$SKILLS_INIT" == true ]]; then
-    ensure_skills_for_engine "$AI_ENGINE" "install"
-    exit 0
-  fi
-
   if [[ "$DRY_RUN" == true ]] && [[ "$MAX_ITERATIONS" -eq 0 ]]; then
     MAX_ITERATIONS=1
   fi
@@ -2894,11 +2556,9 @@ main() {
   trap 'exit 130' INT TERM HUP
   
   # Check requirements
+  stage_banner "Prepare"
   check_requirements
 
-  # Warn if skills are missing
-  ensure_skills_for_engine "$AI_ENGINE" "warn"
-  
   # Ensure we are on a run branch if tasks.yaml defines one
   ensure_run_branch
 

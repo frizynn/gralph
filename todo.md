@@ -3,7 +3,6 @@
 ## Architecture & Communication
 - [ ] Pass reports and progress context between agents.
 - [ ] Implement "Allow All" permission mode: enable agents to automatically trigger and fix OS or environment-level failures.
-- [ ] Evaluate if mutexes are actually necessary (currently unused by agents).
 - [ ] Audit core requirements and remove unnecessary complexity.
 
 ## Execution & Parallelism

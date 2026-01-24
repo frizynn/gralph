@@ -6,11 +6,12 @@ GRALPH is a parallel AI coding runner that executes tasks across multiple agents
 
 ## Overview
 
-GRALPH reads a PRD, generates tasks with dependencies, and runs multiple agents in parallel using a DAG scheduler. Each task produces artifacts and commits work to isolated branches.
+GRALPH reads a PRD, generates tasks with dependencies, and runs multiple agents in parallel using a DAG scheduler. The pipeline is explicit and simple: Prepare -> Execute -> Integrate.
 
 ## Features
 
-- DAG-based task scheduling with dependencies and mutexes
+- DAG-based task scheduling with dependencies and automatic resource locks
+- 3-stage pipeline: Prepare -> Execute -> Integrate
 - Parallel execution by default (isolated git worktrees)
 - Per-PRD run directories with all artifacts
 - Automatic resume on re-run
@@ -31,14 +32,13 @@ mkdir -p scripts/gralph
 cp /path/to/gralph/gralph.sh scripts/gralph/
 chmod +x scripts/gralph/gralph.sh
 
-# Install required skills for the selected engine
-./scripts/gralph/gralph.sh --init
+# (No extra setup required)
 ```
 
 ## Usage
 
 ```bash
-# 1. Create PRD with prd-id (use /prd skill)
+# 1. Create PRD with prd-id
 # 2. Run gralph (parallel by default)
 ./scripts/gralph/gralph.sh --opencode
 
@@ -75,7 +75,7 @@ prd-id: my-feature
 ...
 ```
 
-GRALPH generates `tasks.yaml` automatically from PRD.md.
+GRALPH generates `tasks.yaml` automatically from PRD.md and infers safe resource locks from `touches`.
 
 ## Artifacts
 
@@ -88,12 +88,12 @@ Each PRD run creates `artifacts/prd/<prd-id>/`:
 
 ## Workflow
 
-1. Create PRD.md with `prd-id: your-feature` (use /prd skill)
+1. Create PRD.md with `prd-id: your-feature`
 2. Run `./scripts/gralph/gralph.sh --opencode`
-3. GRALPH creates `artifacts/prd/<prd-id>/` with tasks.yaml
-4. Tasks run in parallel using DAG scheduler
-5. Re-run anytime to resume (auto-detects existing run)
-6. Use `--resume <prd-id>` to resume a different PRD
+3. Prepare: GRALPH creates `artifacts/prd/<prd-id>/` with tasks.yaml
+4. Execute: tasks run in parallel using DAG scheduler + automatic resource locks
+5. Integrate: branches merge + semantic review
+6. Re-run anytime to resume (auto-detects existing run)
 
 ## Engines
 
@@ -101,17 +101,6 @@ Each PRD run creates `artifacts/prd/<prd-id>/`:
 - `--claude`
 - `--cursor`
 - `--codex`
-
-## Skills
-
-GRALPH uses these skills:
-- `prd` - Generate PRDs with prd-id
-- `ralph` - Convert PRDs to tasks
-- `task-metadata` - Validate tasks.yaml
-- `dag-planner` - Plan task execution
-- `parallel-safe-implementation` - Safe parallel coding
-- `merge-integrator` - Merge branches
-- `semantic-reviewer` - Review integrated code
 
 ## Contributing
 

@@ -22,12 +22,6 @@ source_ralph() {
   export ORIGINAL_DIR="$TMPDIR"
   
   # Minimal function copies for testing
-  is_yaml_v1() {
-    local version
-    version=$(yq -r '.version // 0' "$PRD_FILE" 2>/dev/null)
-    [[ "$version" == "1" ]]
-  }
-  
   get_all_task_ids_yaml_v1() {
     yq -r '.tasks[].id' "$PRD_FILE" 2>/dev/null
   }
@@ -49,16 +43,13 @@ tasks:
     title: First task
     completed: false
     dependsOn: []
-    mutex: []
+    touches: ["src/**"]
   - id: US-002
     title: Second task
     completed: false
     dependsOn: ["US-001"]
-    mutex: []
+    touches: ["src/**"]
 EOF
-  
-  # Should have version 1
-  is_yaml_v1 || { echo "FAIL: valid schema not detected as v1"; return 1; }
   
   # Should have 2 tasks
   local count
@@ -75,12 +66,12 @@ tasks:
     title: First
     completed: false
     dependsOn: []
-    mutex: []
+    touches: ["src/**"]
   - id: US-001
     title: Duplicate
     completed: false
     dependsOn: []
-    mutex: []
+    touches: ["src/**"]
 EOF
   
   local ids
@@ -102,7 +93,7 @@ tasks:
     title: Task with dep
     completed: false
     dependsOn: ["US-001"]
-    mutex: []
+    touches: ["src/**"]
 EOF
   
   local dep
